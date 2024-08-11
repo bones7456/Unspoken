@@ -57,7 +57,7 @@ class ChatViewModel: ObservableObject {
     func sendMessage(content: String) {
         let message = ["action": "send_message", "recipient_id": recipientId, "content": content]
         sendJSON(message)
-        messages.append(Message(content: content, isFromUser: true, isTyping: false))
+        messages.append(Message(content: content, isFromMe: true, isTyping: false))
     }
     
     private func sendJSON(_ dictionary: [String: Any]) {
@@ -117,7 +117,7 @@ extension ChatViewModel: WebSocketDelegate {
             typingContent = json["content"] as? String ?? ""
         case "new_message":
             if let content = json["content"] as? String {
-                messages.append(Message(content: content, isFromUser: false, isTyping: false))
+                messages.append(Message(content: content, isFromMe: false, isTyping: false))
             }
         default:
             break
@@ -132,19 +132,32 @@ struct ContentView: View {
     
     var body: some View {
         VStack {
-            ScrollView {
-                LazyVStack {
-                    ForEach(viewModel.messages) { message in
-                        MessageView(message: message)
-                    }
-                    if !viewModel.typingContent.isEmpty {
-                        MessageView(
-                            message: Message(
-                                content: viewModel.typingContent,
-                                isFromUser: false,
-                                isTyping: true
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack {
+                        ForEach(viewModel.messages) { message in
+                            MessageView(message: message)
+                        }
+                        if !viewModel.typingContent.isEmpty {
+                            MessageView(
+                                message: Message(
+                                    content: viewModel.typingContent,
+                                    isFromMe: false,
+                                    isTyping: true
+                                )
                             )
-                        )
+                        }
+                        Color.clear.frame(height: 1).id("bottom")
+                    }
+                }
+                .onChange(of: viewModel.messages.count) { _, _ in
+                    withAnimation {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
+                .onChange(of: viewModel.typingContent) { _, _ in
+                    withAnimation {
+                        proxy.scrollTo("bottom", anchor: .bottom)
                     }
                 }
             }
@@ -154,10 +167,11 @@ struct ContentView: View {
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .onChange(of: messageText) { oldValue, newValue in
                         viewModel.sendTyping(content: newValue)
+                    }.onSubmit {
+                        sendMessage()
                     }
                 Button("Send") {
-                    viewModel.sendMessage(content: messageText)
-                    messageText = ""
+                    sendMessage()
                 }
             }.padding()
         }
@@ -168,6 +182,12 @@ struct ContentView: View {
             viewModel.closeChat()
         }
     }
+    
+    private func sendMessage() {
+        // guard !messageText.isEmpty else { return }
+        viewModel.sendMessage(content: messageText)
+        messageText = ""
+    }
 }
 
 struct MessageView: View {
@@ -175,15 +195,15 @@ struct MessageView: View {
     
     var body: some View {
         HStack {
-            if message.isFromUser {
+            if message.isFromMe {
                 Spacer()
             }
             Text(message.content)
                 .padding()
-                .background(message.isFromUser ? Color.green.opacity(message.isTyping ? 0.4 : 1) : Color.blue.opacity(message.isTyping ? 0.4 : 1))
+                .background(message.isFromMe ? Color.green.opacity(message.isTyping ? 0.4 : 1) : Color.blue.opacity(message.isTyping ? 0.4 : 1))
                 .foregroundColor(.white)
                 .cornerRadius(8)
-            if !message.isFromUser {
+            if !message.isFromMe {
                 Spacer()
             }
         }.padding(.horizontal)
@@ -193,6 +213,6 @@ struct MessageView: View {
 struct Message: Identifiable {
     let id = UUID()
     let content: String
-    let isFromUser: Bool
+    let isFromMe: Bool
     let isTyping: Bool
 }
