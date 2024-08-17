@@ -12,14 +12,13 @@ class ChatViewModel: ObservableObject {
     @Published var messages: [Message] = []
     @Published var typingContent: String = ""
     @Published var isChatOpen: Bool = false
+    @Published var roomId: String = ""
     
     private var socket: WebSocket?
-    private let userId: String
-    private let recipientId: String
+    var userId: String
     
-    init(userId: String, recipientId: String) {
+    init(userId: String = UUID().uuidString) {
         self.userId = userId
-        self.recipientId = recipientId
         setupWebSocket()
     }
     
@@ -35,27 +34,38 @@ class ChatViewModel: ObservableObject {
     func sendLogin() {
         let message = ["action": "login", "user_id": userId]
         sendJSON(message)
+        print("when sendLogin userId=\(userId), roomId=\(roomId)")
+        if userId == "host" {
+            createRoom()
+        } else if !roomId.isEmpty {
+            joinRoom()
+        }
     }
     
-    func openChat() {
-        let message = ["action": "open_chat", "recipient_id": recipientId]
+    func createRoom() {
+        let message = ["action": "create_room"]
         sendJSON(message)
-        isChatOpen = true
     }
     
-    func closeChat() {
-        let message = ["action": "close_chat", "recipient_id": recipientId]
+    func joinRoom() {
+        let message = ["action": "join_room", "room_id": roomId]
+        sendJSON(message)
+        print("when joinRoom userId=\(userId), roomId=\(roomId)")
+    }
+    
+    func leaveRoom() {
+        let message = ["action": "leave_room", "room_id": roomId]
         sendJSON(message)
         isChatOpen = false
     }
     
     func sendTyping(content: String) {
-        let message = ["action": "typing", "recipient_id": recipientId, "content": content]
+        let message = ["action": "typing", "room_id": roomId, "content": content]
         sendJSON(message)
     }
     
     func sendMessage(content: String) {
-        let message = ["action": "send_message", "recipient_id": recipientId, "content": content]
+        let message = ["action": "send_message", "room_id": roomId, "content": content]
         sendJSON(message)
         messages.append(Message(content: content, isFromMe: true, isTyping: false))
     }
@@ -108,27 +118,34 @@ extension ChatViewModel: WebSocketDelegate {
         
         let action = json["action"] as? String ?? ""
         
-        switch action {
-        case "chat_opened":
-            isChatOpen = true
-        case "chat_closed":
-            isChatOpen = false
-        case "typing":
-            typingContent = json["content"] as? String ?? ""
-        case "new_message":
-            if let content = json["content"] as? String {
-                messages.append(Message(content: content, isFromMe: false, isTyping: false))
+        DispatchQueue.main.async {
+            switch action {
+            case "room_created", "room_joined":
+                if let roomId = json["room_id"] as? String {
+                    self.roomId = roomId
+                    self.isChatOpen = true
+                }
+            case "typing":
+                self.typingContent = json["content"] as? String ?? ""
+            case "new_message":
+                if let content = json["content"] as? String {
+                    self.messages.append(Message(content: content, isFromMe: false, isTyping: false))
+                }
+            case "error":
+                if let errorMessage = json["message"] as? String {
+                    print("Error: \(errorMessage)")
+                    // You might want to show this error to the user
+                }
+            default:
+                break
             }
-        default:
-            break
         }
     }
 }
 
 struct ContentView: View {
-    @ObservedObject var viewModel: ChatViewModel
+    @EnvironmentObject var viewModel: ChatViewModel
     @State private var messageText: String = ""
-    @State private var typingTask: DispatchWorkItem?
     
     var body: some View {
         VStack {
@@ -175,16 +192,17 @@ struct ContentView: View {
                 }
             }.padding()
         }
+        .navigationBarTitle("Room: \(viewModel.roomId)")
+        .navigationBarItems(trailing: Button("Leave") {
+            viewModel.leaveRoom()
+        })
         .onAppear {
-            viewModel.openChat()
-        }
-        .onDisappear {
-            viewModel.closeChat()
+            //viewModel.sendLogin()
         }
     }
     
     private func sendMessage() {
-        // guard !messageText.isEmpty else { return }
+        //guard !messageText.isEmpty else { return }
         viewModel.sendMessage(content: messageText)
         messageText = ""
     }
