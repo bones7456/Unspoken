@@ -58,7 +58,7 @@ class ChatViewModel: ObservableObject {
         sendJSON(message)
         isChatOpen = false
         roomId = ""
-        messages = []
+        //messages = []
     }
     
     func sendTyping(content: String) {
@@ -127,6 +127,16 @@ extension ChatViewModel: WebSocketDelegate {
                     self.roomId = roomId
                     self.isChatOpen = true
                 }
+            case "user_joined":
+                self.messages.append(Message(content: "Guest has joined the room.", isFromMe: false, isTyping: false, isSystem: true))
+            case "user_left":
+                self.messages.append(Message(content: "Guest has left the room.", isFromMe: false, isTyping: false, isSystem: true))
+            case "room_closed":
+                self.messages.append(Message(content: "Host has left the room. The room is closed.", isFromMe: false, isTyping: false, isSystem: true))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    self.leaveRoom()
+                    self.messages = []
+                }
             case "typing":
                 self.typingContent = json["content"] as? String ?? ""
             case "new_message":
@@ -155,7 +165,14 @@ struct ContentView: View {
                 ScrollView {
                     LazyVStack {
                         ForEach(viewModel.messages) { message in
-                            MessageView(message: message)
+                            if message.isSystem {
+                                Text(message.content)
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                    .padding(.vertical, 4)
+                            } else {
+                                MessageView(message: message)
+                            }
                         }
                         if !viewModel.typingContent.isEmpty {
                             MessageView(
@@ -198,8 +215,14 @@ struct ContentView: View {
         .navigationBarItems(trailing: Button("Leave") {
             viewModel.leaveRoom()
         })
-        .onAppear {
-            //viewModel.sendLogin()
+        .alert(isPresented: .constant(!viewModel.isChatOpen && !viewModel.messages.isEmpty)) {
+            Alert(
+                title: Text("Room Closed"),
+                message: Text(viewModel.messages.last?.content ?? ""),
+                dismissButton: .default(Text("OK")) {
+                    viewModel.messages = []
+                }
+            )
         }
     }
     
@@ -235,4 +258,12 @@ struct Message: Identifiable {
     let content: String
     let isFromMe: Bool
     let isTyping: Bool
+    let isSystem: Bool
+    
+    init(content: String, isFromMe: Bool, isTyping: Bool, isSystem: Bool = false) {
+        self.content = content
+        self.isFromMe = isFromMe
+        self.isTyping = isTyping
+        self.isSystem = isSystem
+    }
 }
