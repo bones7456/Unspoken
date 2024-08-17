@@ -57,6 +57,8 @@ class ChatViewModel: ObservableObject {
         let message = ["action": "leave_room", "room_id": roomId]
         sendJSON(message)
         isChatOpen = false
+        roomId = ""
+        messages = []
     }
     
     func sendTyping(content: String) {
@@ -192,7 +194,7 @@ struct ContentView: View {
                 }
             }.padding()
         }
-        .navigationBarTitle("Room: \(viewModel.roomId)")
+        .navigationBarItems(leading: Text("Room: \(viewModel.roomId)"))
         .navigationBarItems(trailing: Button("Leave") {
             viewModel.leaveRoom()
         })

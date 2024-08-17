@@ -9,19 +9,19 @@ import SwiftUI
 
 @main
 struct UnspokenApp: App {
-    @StateObject private var chatViewModel = ChatViewModel(userId: UUID().uuidString)
+    @StateObject private var chatViewModel = ChatViewModel()
     @State private var isRoomSelected = false
-    
+
     var body: some Scene {
         WindowGroup {
-            if isRoomSelected {
-                NavigationView {
+            NavigationView {
+                if chatViewModel.isChatOpen {
                     ContentView()
                         .environmentObject(chatViewModel)
+                } else {
+                    RoomSelectionView(isRoomSelected: $isRoomSelected)
+                        .environmentObject(chatViewModel)
                 }
-            } else {
-                RoomSelectionView(isRoomSelected: $isRoomSelected)
-                    .environmentObject(chatViewModel)
             }
         }
     }
