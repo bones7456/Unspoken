@@ -158,6 +158,7 @@ extension ChatViewModel: WebSocketDelegate {
 struct ContentView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var messageText: String = ""
+    @FocusState private var isTextFieldFocused: Bool
     
     var body: some View {
         VStack {
@@ -200,6 +201,7 @@ struct ContentView: View {
             
             HStack {
                 TextField("Type a message", text: $messageText)
+                    .focused($isTextFieldFocused)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .onChange(of: messageText) { oldValue, newValue in
                         viewModel.sendTyping(content: newValue)
@@ -230,6 +232,7 @@ struct ContentView: View {
         //guard !messageText.isEmpty else { return }
         viewModel.sendMessage(content: messageText)
         messageText = ""
+        isTextFieldFocused = true // 发送消息后保持输入框焦点
     }
 }
 

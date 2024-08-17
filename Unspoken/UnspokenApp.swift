@@ -36,7 +36,7 @@ struct RoomSelectionView: View {
     
     var body: some View {
         VStack(spacing: 20) {
-            Text("Welcome to Chat App")
+            Text("Welcome to Unspoken")
                 .font(.largeTitle)
                 .padding()
             
