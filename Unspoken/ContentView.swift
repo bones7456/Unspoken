@@ -187,12 +187,12 @@ struct ContentView: View {
                         Color.clear.frame(height: 1).id("bottom")
                     }
                 }
-                .onChange(of: viewModel.messages.count) { _, _ in
+                .onChange(of: viewModel.messages.count) { _ in
                     withAnimation {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                 }
-                .onChange(of: viewModel.typingContent) { _, _ in
+                .onChange(of: viewModel.typingContent) { _ in
                     withAnimation {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
@@ -203,7 +203,7 @@ struct ContentView: View {
                 TextField("Type a message", text: $messageText)
                     .focused($isTextFieldFocused)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .onChange(of: messageText) { oldValue, newValue in
+                    .onChange(of: messageText) { newValue in
                         viewModel.sendTyping(content: newValue)
                     }.onSubmit {
                         sendMessage()
