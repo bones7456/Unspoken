@@ -23,7 +23,7 @@ class ChatViewModel: ObservableObject {
     }
     
     private func setupWebSocket() {
-        let url = URL(string: "ws://13.229.116.205:8765")!
+        let url = URL(string: "ws://unspoken.luy.li:8765")!
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
         socket = WebSocket(request: request)
