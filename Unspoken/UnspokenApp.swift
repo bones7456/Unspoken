@@ -33,6 +33,7 @@ struct RoomSelectionView: View {
     @State private var inputRoomId: String = ""
     @State private var showingRoomInput = false
     @State private var errorMessage: String?
+    @State private var agreeToTerms = true
     
     var body: some View {
         VStack(spacing: 20) {
@@ -41,7 +42,11 @@ struct RoomSelectionView: View {
                 .padding()
             
             Button(action: {
-                createRoom()
+                if agreeToTerms {
+                    createRoom()
+                } else {
+                    errorMessage = "Please agree to the terms before proceeding."
+                }
             }) {
                 Text("Create Room")
                     .font(.headline)
@@ -53,7 +58,11 @@ struct RoomSelectionView: View {
             }
             
             Button(action: {
-                showingRoomInput = true
+                if agreeToTerms {
+                    showingRoomInput = true
+                } else {
+                    errorMessage = "Please agree to the terms before proceeding."
+                }
             }) {
                 Text("Join Room")
                     .font(.headline)
@@ -69,6 +78,19 @@ struct RoomSelectionView: View {
                     .foregroundColor(.red)
                     .padding()
             }
+            
+            HStack {
+                Toggle("", isOn: $agreeToTerms).labelsHidden().scaleEffect(0.6)
+                
+                Text("By clicking Create or Join,\nyou agree to our ")
+                + Text("[EULA](http://unspoken.luy.li/EULA.html)")
+                    .foregroundColor(.blue)
+                + Text(" and ")
+                + Text("[Privacy Policy](http://unspoken.luy.li/Privacy.html)")
+                    .foregroundColor(.blue)
+            }
+            .font(.footnote)
+            .padding(.horizontal)
         }
         .sheet(isPresented: $showingRoomInput) {
             VStack {
