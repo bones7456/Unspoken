@@ -34,12 +34,35 @@ struct RoomSelectionView: View {
     @State private var showingRoomInput = false
     @State private var errorMessage: String?
     @State private var agreeToTerms = true
+    @State private var serverAddress: String = "unspoken.luy.li"
+    @State private var serverPort: String = "8765"
     
     var body: some View {
         VStack(spacing: 20) {
             Text("Welcome to Unspoken")
                 .font(.largeTitle)
                 .padding()
+            
+            HStack {
+                VStack(alignment: .leading) {
+                    Text("Server")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    TextField("Address", text: $serverAddress)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                }
+                .frame(width: 200)
+                
+                VStack(alignment: .leading) {
+                    Text("Port")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    TextField("Port", text: $serverPort)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .keyboardType(.numberPad)
+                }
+                .frame(width: 100)
+            }
             
             Button(action: {
                 if agreeToTerms {
@@ -113,6 +136,7 @@ struct RoomSelectionView: View {
     
     private func createRoom() {
         chatViewModel.userId = "host"
+        chatViewModel.updateServerAddress(address: serverAddress, port: serverPort)
         chatViewModel.sendLogin()
     }
     
@@ -124,6 +148,7 @@ struct RoomSelectionView: View {
         
         chatViewModel.userId = "guest"
         chatViewModel.roomId = roomId
+        chatViewModel.updateServerAddress(address: serverAddress, port: serverPort)
         chatViewModel.sendLogin()
         showingRoomInput = false
     }

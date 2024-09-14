@@ -13,6 +13,7 @@ class ChatViewModel: ObservableObject {
     @Published var typingContent: String = ""
     @Published var isChatOpen: Bool = false
     @Published var roomId: String = ""
+    @Published var serverAddress: String = "ws://unspoken.luy.li:8765"
     
     private var socket: WebSocket?
     var userId: String
@@ -23,7 +24,9 @@ class ChatViewModel: ObservableObject {
     }
     
     private func setupWebSocket() {
-        let url = URL(string: "ws://unspoken.luy.li:8765")!
+        socket?.disconnect()
+        
+        let url = URL(string: serverAddress)!
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
         socket = WebSocket(request: request)
@@ -82,6 +85,16 @@ class ChatViewModel: ObservableObject {
         } catch {
             print("Error encoding JSON: \(error)")
         }
+    }
+    
+    func setServerAddress(_ address: String) {
+        self.serverAddress = address
+    }
+    
+    func updateServerAddress(address: String, port: String) {
+        print("Server set to \(address):\(port)")
+        self.serverAddress = "ws://\(address):\(port)"
+        setupWebSocket()
     }
 }
 
