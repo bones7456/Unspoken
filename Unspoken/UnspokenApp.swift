@@ -34,7 +34,7 @@ struct RoomSelectionView: View {
     @State private var showingRoomInput = false
     @State private var errorMessage: String?
     @State private var agreeToTerms = true
-    @State private var serverAddress: String = "unspoken.luy.li"
+    @State private var serverAddress: String = "18.138.249.97"
     @State private var serverPort: String = "8765"
     
     var body: some View {
@@ -135,9 +135,10 @@ struct RoomSelectionView: View {
     }
     
     private func createRoom() {
-        chatViewModel.userId = "host"
+        chatViewModel.role = "host"
         chatViewModel.updateServerAddress(address: serverAddress, port: serverPort)
         chatViewModel.sendLogin()
+        chatViewModel.createRoom()
     }
     
     private func joinRoom(roomId: String) {
@@ -146,10 +147,11 @@ struct RoomSelectionView: View {
             return
         }
         
-        chatViewModel.userId = "guest"
+        chatViewModel.role = "guest"
         chatViewModel.roomId = roomId
         chatViewModel.updateServerAddress(address: serverAddress, port: serverPort)
         chatViewModel.sendLogin()
         showingRoomInput = false
+        chatViewModel.joinRoom()
     }
 }

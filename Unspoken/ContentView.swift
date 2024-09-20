@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Starscream
+import CryptoKit
 
 class ChatViewModel: ObservableObject {
     @Published var messages: [Message] = []
@@ -14,13 +15,21 @@ class ChatViewModel: ObservableObject {
     @Published var isChatOpen: Bool = false
     @Published var roomId: String = ""
     @Published var serverAddress: String = "ws://unspoken.luy.li:8765"
+    @Published var role: String = ""
     
     private var socket: WebSocket?
-    var userId: String
+    private var userId: String
     
-    init(userId: String = UUID().uuidString) {
-        self.userId = userId
+    private var privateKey: SecKey?
+    private var publicKey: SecKey?
+    private var peerPublicKey: SecKey?
+    
+    private var peerUserId: String?
+    
+    init() {
+        self.userId = UUID().uuidString
         setupWebSocket()
+        generateKeyPair()
     }
     
     private func setupWebSocket() {
@@ -37,12 +46,6 @@ class ChatViewModel: ObservableObject {
     func sendLogin() {
         let message = ["action": "login", "user_id": userId]
         sendJSON(message)
-        print("when sendLogin userId=\(userId), roomId=\(roomId)")
-        if userId == "host" {
-            createRoom()
-        } else if !roomId.isEmpty {
-            joinRoom()
-        }
     }
     
     func createRoom() {
@@ -53,24 +56,140 @@ class ChatViewModel: ObservableObject {
     func joinRoom() {
         let message = ["action": "join_room", "room_id": roomId]
         sendJSON(message)
-        print("when joinRoom userId=\(userId), roomId=\(roomId)")
     }
     
     func leaveRoom() {
-        let message = ["action": "leave_room", "room_id": roomId]
+        let message = ["action": "leave_room", "room_id": roomId, "role": role]
         sendJSON(message)
         isChatOpen = false
         roomId = ""
-        //messages = []
+        role = ""
+    }
+    
+    private func generateKeyPair() {
+        print("start to generateKeyPair...")
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeySizeInBits as String: 2048
+        ]
+        
+        var error: Unmanaged<CFError>?
+        guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error),
+              let publicKey = SecKeyCopyPublicKey(privateKey) else {
+            print("Failed to generate key pair: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
+            return
+        }
+        
+        self.privateKey = privateKey
+        self.publicKey = publicKey
+        print("privateKey: \(privateKey);publicKey: \(publicKey)")
+        
+        sendPublicKey()
+    }
+    
+    private func sendPublicKey() {
+        guard let publicKey = publicKey else { return }
+        
+        var error: Unmanaged<CFError>?
+        guard let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else {
+            print("Failed to get public key data: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
+            return
+        }
+        
+        let publicKeyBase64 = publicKeyData.base64EncodedString()
+        
+        let message = [
+            "action": "exchange_public_key",
+            "user_id": userId,
+            "public_key": publicKeyBase64
+        ]
+        
+        sendJSON(message)
+    }
+    
+    private func requestPeerPublicKey() {
+        guard let peerUserId = peerUserId else {
+            print("Peer user ID not available")
+            return
+        }
+        
+        let message = [
+            "action": "request_public_key",
+            "requested_user_id": peerUserId
+        ]
+        
+        sendJSON(message)
+    }
+    
+    private func encryptMessage(_ message: String) -> String? {
+        guard let peerPublicKey = peerPublicKey else {
+            print("Peer public key not available")
+            return nil
+        }
+        
+        guard let messageData = message.data(using: .utf8) else {
+            print("Failed to convert message to data")
+            return nil
+        }
+        
+        var error: Unmanaged<CFError>?
+        guard let encryptedData = SecKeyCreateEncryptedData(peerPublicKey,
+                                                            .rsaEncryptionOAEPSHA256,
+                                                            messageData as CFData,
+                                                            &error) as Data? else {
+            print("Encryption failed: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
+            return nil
+        }
+        
+        return encryptedData.base64EncodedString()
+    }
+    
+    private func decryptMessage(_ encryptedMessage: String) -> String? {
+        guard let privateKey = privateKey else {
+            print("Private key not available")
+            return nil
+        }
+        
+        guard let encryptedData = Data(base64Encoded: encryptedMessage) else {
+            print("Failed to decode base64 encrypted message")
+            return nil
+        }
+        
+        var error: Unmanaged<CFError>?
+        guard let decryptedData = SecKeyCreateDecryptedData(privateKey,
+                                                            .rsaEncryptionOAEPSHA256,
+                                                            encryptedData as CFData,
+                                                            &error) as Data? else {
+            print("Decryption failed: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
+            return nil
+        }
+        
+        return String(data: decryptedData, encoding: .utf8)
     }
     
     func sendTyping(content: String) {
-        let message = ["action": "typing", "room_id": roomId, "content": content]
+        guard let encryptedContent = encryptMessage(content) else { return }
+        
+        let message = [
+            "action": "typing",
+            "room_id": roomId,
+            "role": role,
+            "encrypted_content": encryptedContent
+        ]
+        
         sendJSON(message)
     }
     
     func sendMessage(content: String) {
-        let message = ["action": "send_message", "room_id": roomId, "content": content]
+        guard let encryptedContent = encryptMessage(content) else { return }
+        
+        let message = [
+            "action": "send_message",
+            "room_id": roomId,
+            "role": role,
+            "encrypted_content": encryptedContent
+        ]
+        
         sendJSON(message)
         messages.append(Message(content: content, isFromMe: true, isTyping: false))
     }
@@ -87,14 +206,11 @@ class ChatViewModel: ObservableObject {
         }
     }
     
-    func setServerAddress(_ address: String) {
-        self.serverAddress = address
-    }
-    
     func updateServerAddress(address: String, port: String) {
         print("Server set to \(address):\(port)")
         self.serverAddress = "ws://\(address):\(port)"
         setupWebSocket()
+        generateKeyPair()
     }
 }
 
@@ -136,14 +252,43 @@ extension ChatViewModel: WebSocketDelegate {
         DispatchQueue.main.async {
             switch action {
             case "room_created", "room_joined":
-                if let roomId = json["room_id"] as? String {
+                if let roomId = json["room_id"] as? String,
+                   let role = json["role"] as? String {
                     self.roomId = roomId
+                    self.role = role
                     self.isChatOpen = true
+                    if role == "guest" {
+                        self.sendPublicKey()  // Guest 加入房间后发送公钥
+                    }
                 }
             case "user_joined":
-                self.messages.append(Message(content: "Guest has joined the room.", isFromMe: false, isTyping: false, isSystem: true))
+                if let role = json["role"] as? String,
+                   let joinedUserId = json["user_id"] as? String {
+                    self.messages.append(Message(content: "Guest has joined the room.", isFromMe: false, isTyping: false, isSystem: true))
+                    self.peerUserId = joinedUserId
+                    if self.role == "host" {
+                        self.sendPublicKey()  // Host 发送公钥给新加入的 Guest
+                    }
+                }
+            case "public_key_exchange", "public_key_response":
+                if let userId = json["user_id"] as? String,
+                   let publicKeyBase64 = json["public_key"] as? String,
+                   let publicKeyData = Data(base64Encoded: publicKeyBase64) {
+                    var error: Unmanaged<CFError>?
+                    if let peerPublicKey = SecKeyCreateWithData(publicKeyData as CFData,
+                                                                [kSecAttrKeyType: kSecAttrKeyTypeRSA,
+                                                                 kSecAttrKeyClass: kSecAttrKeyClassPublic] as CFDictionary,
+                                                                &error) {
+                        self.peerPublicKey = peerPublicKey
+                        print("Received and set peer public key")
+                    } else {
+                        print("Failed to create peer public key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
+                    }
+                }
             case "user_left":
-                self.messages.append(Message(content: "Guest has left the room.", isFromMe: false, isTyping: false, isSystem: true))
+                if let role = json["role"] as? String {
+                    self.messages.append(Message(content: "\(role.capitalized) has left the room.", isFromMe: false, isTyping: false, isSystem: true))
+                }
             case "room_closed":
                 self.messages.append(Message(content: "Host has left the room. The room is closed.", isFromMe: false, isTyping: false, isSystem: true))
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -151,10 +296,16 @@ extension ChatViewModel: WebSocketDelegate {
                     self.messages = []
                 }
             case "typing":
-                self.typingContent = json["content"] as? String ?? ""
+                if let role = json["role"] as? String,
+                   let encryptedContent = json["encrypted_content"] as? String,
+                   let decryptedContent = self.decryptMessage(encryptedContent) {
+                    self.typingContent = decryptedContent
+                }
             case "new_message":
-                if let content = json["content"] as? String {
-                    self.messages.append(Message(content: content, isFromMe: false, isTyping: false))
+                if let role = json["role"] as? String,
+                   let encryptedContent = json["encrypted_content"] as? String,
+                   let decryptedContent = self.decryptMessage(encryptedContent) {
+                    self.messages.append(Message(content: decryptedContent, isFromMe: false, isTyping: false))
                 }
             case "error":
                 if let errorMessage = json["message"] as? String {
