@@ -259,8 +259,7 @@ extension ChatViewModel: WebSocketDelegate {
                     self.role = role
                     self.isChatOpen = true
                 }
-                if let peerRole = json["peer_role"] as? String,
-                   let peerUserId = json["peer_user_id"] as? String,
+                if let peerUserId = json["peer_user_id"] as? String,
                    let publicKeyBase64 = json["peer_public_key"] as? String,
                    let publicKeyData = Data(base64Encoded: publicKeyBase64) {
                     var error: Unmanaged<CFError>?
@@ -271,13 +270,13 @@ extension ChatViewModel: WebSocketDelegate {
                         self.peerPublicKey = peerPublicKey
                         self.peerUserId = peerUserId
                         print("Received and set peer public key")
+                        self.messages.append(Message(content: "Encrypted channel established, enjoy!", isFromMe: false, isTyping: false, isSystem: true))
                     } else {
                         print("Failed to create peer public key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
                     }
                 }
             case "user_joined":
                 if let role = json["role"] as? String,
-                   let peerRole = json["peer_role"] as? String,
                    let peerUserId = json["peer_user_id"] as? String,
                    let publicKeyBase64 = json["peer_public_key"] as? String,
                    let publicKeyData = Data(base64Encoded: publicKeyBase64) {
@@ -289,6 +288,7 @@ extension ChatViewModel: WebSocketDelegate {
                         self.peerPublicKey = peerPublicKey
                         self.peerUserId = peerUserId
                         print("Received and set peer public key")
+                        self.messages.append(Message(content: "\(role.capitalized) joined, Encrypted channel established, enjoy!", isFromMe: false, isTyping: false, isSystem: true))
                     } else {
                         print("Failed to create peer public key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
                     }
@@ -304,15 +304,13 @@ extension ChatViewModel: WebSocketDelegate {
                     self.messages = []
                 }
             case "typing":
-                if let role = json["role"] as? String,
-                   let encryptedAESKey = json["encrypted_aes_key"] as? String,
+                if let encryptedAESKey = json["encrypted_aes_key"] as? String,
                    let encryptedContent = json["encrypted_content"] as? String,
                    let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
                     self.typingContent = decryptedContent
                 }
             case "new_message":
-                if let role = json["role"] as? String,
-                   let encryptedAESKey = json["encrypted_aes_key"] as? String,
+                if let encryptedAESKey = json["encrypted_aes_key"] as? String,
                    let encryptedContent = json["encrypted_content"] as? String,
                    let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
                     self.messages.append(Message(content: decryptedContent, isFromMe: false, isTyping: false))
