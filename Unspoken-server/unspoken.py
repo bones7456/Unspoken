@@ -32,31 +32,9 @@ async def handle_connection(websocket, path):
             if action == 'login':
                 user_id = data['user_id']
                 connected_users[user_id] = websocket
-                log_message("SYSTEM", "Server", f"User {user_id} logged in")
-
-            elif action == 'exchange_public_key':
-                user_id = data['user_id']
                 public_key_pem = data['public_key']
                 user_public_keys[user_id] = public_key_pem
-                log_message("SYSTEM", "Server", f"Received public key from user {user_id}")
-
-            elif action == 'request_public_key':
-                requested_user_id = data['requested_user_id']
-                if requested_user_id in user_public_keys:
-                    response = json.dumps({
-                        'action': 'public_key_response',
-                        'user_id': requested_user_id,
-                        'public_key': user_public_keys[requested_user_id]
-                    })
-                    await websocket.send(response)
-                    log_message("SENT", user_id, response)
-                else:
-                    error_message = json.dumps({
-                        'action': 'error',
-                        'message': 'Public key not found'
-                    })
-                    await websocket.send(error_message)
-                    log_message("SENT", user_id, error_message)
+                log_message("SYSTEM", "Server", f"User {user_id} logged in with public key")
 
             elif action == 'create_room':
                 global next_room_id
@@ -77,34 +55,30 @@ async def handle_connection(websocket, path):
                 if room_id in rooms and rooms[room_id]['guest'] is None:
                     rooms[room_id]['guest'] = user_id
                     room_role_to_userid[f"{room_id}:guest"] = user_id
+                    # 给guest发送room_joined消息
                     response = json.dumps({
                         'action': 'room_joined',
                         'room_id': room_id,
-                        'role': 'guest'
+                        'role': 'guest',
+                        'peer_role': 'host',
+                        'peer_user_id': rooms[room_id]['host'],
+                        'peer_public_key': user_public_keys[rooms[room_id]['host']]
                     })
                     await websocket.send(response)
                     log_message("SENT", user_id, response)
-                    # 通知房间内的其他用户有新用户加入
+                    # 通知房间内的host有新用户加入
                     host_id = rooms[room_id]['host']
                     if host_id in connected_users:
                         notification = json.dumps({
                             'action': 'user_joined',
                             'room_id': room_id,
-                            'role': 'guest',
-                            'user_id': user_id  # 添加这一行
+                            'role': 'host',
+                            'peer_role': 'guest',
+                            'peer_user_id': user_id,
+                            'peer_public_key': user_public_keys[user_id]
                         })
                         await connected_users[host_id].send(notification)
                         log_message("SENT", host_id, notification)
-                        
-                        # 发送 host 的公钥给 guest
-                        if host_id in user_public_keys:
-                            host_key_message = json.dumps({
-                                'action': 'public_key_exchange',
-                                'user_id': host_id,
-                                'public_key': user_public_keys[host_id]
-                            })
-                            await websocket.send(host_key_message)
-                            log_message("SENT", user_id, host_key_message)
                 else:
                     error_message = json.dumps({
                         'action': 'error',
@@ -147,6 +121,7 @@ async def handle_connection(websocket, path):
             elif action == 'typing':
                 room_id = data['room_id']
                 role = data['role']
+                encrypted_aes_key = data['encrypted_aes_key']
                 encrypted_content = data['encrypted_content']
                 if room_id in rooms:
                     other_role = 'guest' if role == 'host' else 'host'
@@ -156,6 +131,7 @@ async def handle_connection(websocket, path):
                             'action': 'typing',
                             'room_id': room_id,
                             'role': role,
+                            'encrypted_aes_key': encrypted_aes_key,
                             'encrypted_content': encrypted_content
                         })
                         await connected_users[other_user_id].send(notification)
@@ -164,9 +140,10 @@ async def handle_connection(websocket, path):
             elif action == 'send_message':
                 room_id = data['room_id']
                 role = data['role']
+                encrypted_aes_key = data['encrypted_aes_key']
                 encrypted_content = data['encrypted_content']
                 if room_id in rooms:
-                    rooms[room_id]['messages'].append({'role': role, 'encrypted_content': encrypted_content})
+                    rooms[room_id]['messages'].append({'role': role, 'encrypted_aes_key': encrypted_aes_key, 'encrypted_content': encrypted_content})
                     other_role = 'guest' if role == 'host' else 'host'
                     other_user_id = rooms[room_id][other_role]
                     if other_user_id and other_user_id in connected_users:
@@ -174,6 +151,7 @@ async def handle_connection(websocket, path):
                             'action': 'new_message',
                             'room_id': room_id,
                             'role': role,
+                            'encrypted_aes_key': encrypted_aes_key,
                             'encrypted_content': encrypted_content
                         })
                         await connected_users[other_user_id].send(notification)

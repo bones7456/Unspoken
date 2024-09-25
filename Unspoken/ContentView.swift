@@ -14,7 +14,7 @@ class ChatViewModel: ObservableObject {
     @Published var typingContent: String = ""
     @Published var isChatOpen: Bool = false
     @Published var roomId: String = ""
-    @Published var serverAddress: String = "ws://unspoken.luy.li:8765"
+    @Published var serverAddress: String = "ws://18.138.249.97:8765"
     @Published var role: String = ""
     
     private var socket: WebSocket?
@@ -44,16 +44,33 @@ class ChatViewModel: ObservableObject {
     }
     
     func sendLogin() {
-        let message = ["action": "login", "user_id": userId]
+        guard let publicKey = publicKey else { return }
+        
+        var error: Unmanaged<CFError>?
+        guard let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else {
+            print("Failed to get public key data: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
+            return
+        }
+        
+        let publicKeyBase64 = publicKeyData.base64EncodedString()
+        
+        let message = [
+            "action": "login",
+            "user_id": userId,
+            "public_key": publicKeyBase64
+        ]
+        
         sendJSON(message)
     }
     
     func createRoom() {
+        sendLogin()
         let message = ["action": "create_room"]
         sendJSON(message)
     }
     
     func joinRoom() {
+        sendLogin()
         let message = ["action": "join_room", "room_id": roomId]
         sendJSON(message)
     }
@@ -83,84 +100,66 @@ class ChatViewModel: ObservableObject {
         self.privateKey = privateKey
         self.publicKey = publicKey
         print("privateKey: \(privateKey);publicKey: \(publicKey)")
-        
-        sendPublicKey()
     }
     
-    private func sendPublicKey() {
-        guard let publicKey = publicKey else { return }
-        
-        var error: Unmanaged<CFError>?
-        guard let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else {
-            print("Failed to get public key data: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
-            return
-        }
-        
-        let publicKeyBase64 = publicKeyData.base64EncodedString()
-        
-        let message = [
-            "action": "exchange_public_key",
-            "user_id": userId,
-            "public_key": publicKeyBase64
-        ]
-        
-        sendJSON(message)
-    }
-    
-    private func requestPeerPublicKey() {
-        guard let peerUserId = peerUserId else {
-            print("Peer user ID not available")
-            return
-        }
-        
-        let message = [
-            "action": "request_public_key",
-            "requested_user_id": peerUserId
-        ]
-        
-        sendJSON(message)
-    }
-    
-    private func encryptMessage(_ message: String) -> String? {
+    private func encryptMessage(_ message: String) -> (String, String)? {
         guard let peerPublicKey = peerPublicKey else {
             print("Peer public key not available")
             return nil
         }
         
+        // 生成随机AES密钥
+        let aesKey = SymmetricKey(size: .bits256)
+        let aesKeyData = aesKey.withUnsafeBytes { Data($0) }
+        
+        // 使用AES加密消息
         guard let messageData = message.data(using: .utf8) else {
             print("Failed to convert message to data")
             return nil
         }
+        let encryptedMessage = try? AES.GCM.seal(messageData, using: aesKey).combined
         
+        // 使用RSA加密AES密钥
         var error: Unmanaged<CFError>?
-        guard let encryptedData = SecKeyCreateEncryptedData(peerPublicKey,
-                                                            .rsaEncryptionOAEPSHA256,
-                                                            messageData as CFData,
-                                                            &error) as Data? else {
-            print("Encryption failed: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
+        guard let encryptedAESKey = SecKeyCreateEncryptedData(peerPublicKey,
+                                                              .rsaEncryptionOAEPSHA256,
+                                                              aesKeyData as CFData,
+                                                              &error) as Data? else {
+            print("AES key encryption failed: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
             return nil
         }
         
-        return encryptedData.base64EncodedString()
+        return (encryptedAESKey.base64EncodedString(), encryptedMessage?.base64EncodedString() ?? "")
     }
     
-    private func decryptMessage(_ encryptedMessage: String) -> String? {
+    private func decryptMessage(encryptedAESKey: String, encryptedMessage: String) -> String? {
         guard let privateKey = privateKey else {
             print("Private key not available")
             return nil
         }
         
-        guard let encryptedData = Data(base64Encoded: encryptedMessage) else {
-            print("Failed to decode base64 encrypted message")
+        guard let encryptedAESKeyData = Data(base64Encoded: encryptedAESKey),
+              let encryptedMessageData = Data(base64Encoded: encryptedMessage) else {
+            print("Failed to decode base64 encrypted data")
             return nil
         }
         
+        // 解密AES密钥
         var error: Unmanaged<CFError>?
-        guard let decryptedData = SecKeyCreateDecryptedData(privateKey,
-                                                            .rsaEncryptionOAEPSHA256,
-                                                            encryptedData as CFData,
-                                                            &error) as Data? else {
-            print("Decryption failed: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
+        guard let decryptedAESKeyData = SecKeyCreateDecryptedData(privateKey,
+                                                                  .rsaEncryptionOAEPSHA256,
+                                                                  encryptedAESKeyData as CFData,
+                                                                  &error) as Data? else {
+            print("AES key decryption failed: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
+            return nil
+        }
+        
+        let aesKey = SymmetricKey(data: decryptedAESKeyData)
+        
+        // 使用AES密钥解密消息
+        guard let sealedBox = try? AES.GCM.SealedBox(combined: encryptedMessageData),
+              let decryptedData = try? AES.GCM.open(sealedBox, using: aesKey) else {
+            print("Message decryption failed")
             return nil
         }
         
@@ -168,12 +167,13 @@ class ChatViewModel: ObservableObject {
     }
     
     func sendTyping(content: String) {
-        guard let encryptedContent = encryptMessage(content) else { return }
+        guard let (encryptedAESKey, encryptedContent) = encryptMessage(content) else { return }
         
         let message = [
             "action": "typing",
             "room_id": roomId,
             "role": role,
+            "encrypted_aes_key": encryptedAESKey,
             "encrypted_content": encryptedContent
         ]
         
@@ -181,12 +181,13 @@ class ChatViewModel: ObservableObject {
     }
     
     func sendMessage(content: String) {
-        guard let encryptedContent = encryptMessage(content) else { return }
+        guard let (encryptedAESKey, encryptedContent) = encryptMessage(content) else { return }
         
         let message = [
             "action": "send_message",
             "room_id": roomId,
             "role": role,
+            "encrypted_aes_key": encryptedAESKey,
             "encrypted_content": encryptedContent
         ]
         
@@ -219,7 +220,7 @@ extension ChatViewModel: WebSocketDelegate {
         switch event {
         case .connected(_):
             print("WebSocket connected")
-            sendLogin()
+            //sendLogin()
         case .disconnected(_, _):
             print("WebSocket disconnected")
         case .text(let string):
@@ -257,22 +258,10 @@ extension ChatViewModel: WebSocketDelegate {
                     self.roomId = roomId
                     self.role = role
                     self.isChatOpen = true
-                    if role == "guest" {
-                        self.sendPublicKey()  // Guest 加入房间后发送公钥
-                    }
                 }
-            case "user_joined":
-                if let role = json["role"] as? String,
-                   let joinedUserId = json["user_id"] as? String {
-                    self.messages.append(Message(content: "Guest has joined the room.", isFromMe: false, isTyping: false, isSystem: true))
-                    self.peerUserId = joinedUserId
-                    if self.role == "host" {
-                        self.sendPublicKey()  // Host 发送公钥给新加入的 Guest
-                    }
-                }
-            case "public_key_exchange", "public_key_response":
-                if let userId = json["user_id"] as? String,
-                   let publicKeyBase64 = json["public_key"] as? String,
+                if let peerRole = json["peer_role"] as? String,
+                   let peerUserId = json["peer_user_id"] as? String,
+                   let publicKeyBase64 = json["peer_public_key"] as? String,
                    let publicKeyData = Data(base64Encoded: publicKeyBase64) {
                     var error: Unmanaged<CFError>?
                     if let peerPublicKey = SecKeyCreateWithData(publicKeyData as CFData,
@@ -280,6 +269,25 @@ extension ChatViewModel: WebSocketDelegate {
                                                                  kSecAttrKeyClass: kSecAttrKeyClassPublic] as CFDictionary,
                                                                 &error) {
                         self.peerPublicKey = peerPublicKey
+                        self.peerUserId = peerUserId
+                        print("Received and set peer public key")
+                    } else {
+                        print("Failed to create peer public key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
+                    }
+                }
+            case "user_joined":
+                if let role = json["role"] as? String,
+                   let peerRole = json["peer_role"] as? String,
+                   let peerUserId = json["peer_user_id"] as? String,
+                   let publicKeyBase64 = json["peer_public_key"] as? String,
+                   let publicKeyData = Data(base64Encoded: publicKeyBase64) {
+                    var error: Unmanaged<CFError>?
+                    if let peerPublicKey = SecKeyCreateWithData(publicKeyData as CFData,
+                                                                [kSecAttrKeyType: kSecAttrKeyTypeRSA,
+                                                                 kSecAttrKeyClass: kSecAttrKeyClassPublic] as CFDictionary,
+                                                                &error) {
+                        self.peerPublicKey = peerPublicKey
+                        self.peerUserId = peerUserId
                         print("Received and set peer public key")
                     } else {
                         print("Failed to create peer public key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
@@ -297,14 +305,16 @@ extension ChatViewModel: WebSocketDelegate {
                 }
             case "typing":
                 if let role = json["role"] as? String,
+                   let encryptedAESKey = json["encrypted_aes_key"] as? String,
                    let encryptedContent = json["encrypted_content"] as? String,
-                   let decryptedContent = self.decryptMessage(encryptedContent) {
+                   let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
                     self.typingContent = decryptedContent
                 }
             case "new_message":
                 if let role = json["role"] as? String,
+                   let encryptedAESKey = json["encrypted_aes_key"] as? String,
                    let encryptedContent = json["encrypted_content"] as? String,
-                   let decryptedContent = self.decryptMessage(encryptedContent) {
+                   let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
                     self.messages.append(Message(content: decryptedContent, isFromMe: false, isTyping: false))
                 }
             case "error":
