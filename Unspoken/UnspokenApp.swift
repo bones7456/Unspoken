@@ -180,9 +180,9 @@ struct RoomSelectionView: View {
     
     private func createRoom() {
         chatViewModel.role = "host"
+        chatViewModel.createRoom() // 移到这里
         chatViewModel.updateServerAddress(address: serverAddress, port: serverPort)
-        chatViewModel.sendLogin()
-        chatViewModel.createRoom()
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             withAnimation {
                 isCreating = false
@@ -198,9 +198,9 @@ struct RoomSelectionView: View {
         
         chatViewModel.role = "guest"
         chatViewModel.roomId = roomId
+        chatViewModel.joinRoom() // 移到这里
         chatViewModel.updateServerAddress(address: serverAddress, port: serverPort)
-        chatViewModel.sendLogin()
-        chatViewModel.joinRoom()
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             withAnimation {
                 isJoining = false

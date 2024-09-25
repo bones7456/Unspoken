@@ -22,14 +22,15 @@ class ChatViewModel: ObservableObject {
     
     private var privateKey: SecKey?
     private var publicKey: SecKey?
-    private var peerPublicKey: SecKey?
-    
+    var peerPublicKey: SecKey?
     private var peerUserId: String?
+    
+    private var pendingAction: (() -> Void)?
     
     init() {
         self.userId = UUID().uuidString
-        setupWebSocket()
         generateKeyPair()
+        print("my userId:\(self.userId), Key pair generated.")
     }
     
     private func setupWebSocket() {
@@ -53,26 +54,24 @@ class ChatViewModel: ObservableObject {
         }
         
         let publicKeyBase64 = publicKeyData.base64EncodedString()
-        
-        let message = [
-            "action": "login",
-            "user_id": userId,
-            "public_key": publicKeyBase64
-        ]
-        
+        let message = ["action": "login", "user_id": userId, "public_key": publicKeyBase64]
         sendJSON(message)
     }
     
     func createRoom() {
-        sendLogin()
-        let message = ["action": "create_room"]
-        sendJSON(message)
+        pendingAction = { [weak self] in
+            self?.sendLogin()
+            self?.sendJSON(["action": "create_room"])
+        }
     }
     
     func joinRoom() {
-        sendLogin()
-        let message = ["action": "join_room", "room_id": roomId]
-        sendJSON(message)
+        pendingAction = { [weak self] in
+            self?.sendLogin()
+            if let roomId = self?.roomId {
+                self?.sendJSON(["action": "join_room", "room_id": roomId])
+            }
+        }
     }
     
     func leaveRoom() {
@@ -81,6 +80,7 @@ class ChatViewModel: ObservableObject {
         isChatOpen = false
         roomId = ""
         role = ""
+        messages = [] // 添加这行来清空消息
     }
     
     private func generateKeyPair() {
@@ -99,7 +99,6 @@ class ChatViewModel: ObservableObject {
         
         self.privateKey = privateKey
         self.publicKey = publicKey
-        print("privateKey: \(privateKey);publicKey: \(publicKey)")
     }
     
     private func encryptMessage(_ message: String) -> (String, String)? {
@@ -211,7 +210,6 @@ class ChatViewModel: ObservableObject {
         print("Server set to \(address):\(port)")
         self.serverAddress = "ws://\(address):\(port)"
         setupWebSocket()
-        generateKeyPair()
     }
 }
 
@@ -220,7 +218,10 @@ extension ChatViewModel: WebSocketDelegate {
         switch event {
         case .connected(_):
             print("WebSocket connected")
-            //sendLogin()
+            DispatchQueue.main.async { [weak self] in
+                self?.pendingAction?()
+                self?.pendingAction = nil
+            }
         case .disconnected(_, _):
             print("WebSocket disconnected")
         case .text(let string):
@@ -276,7 +277,7 @@ extension ChatViewModel: WebSocketDelegate {
                     }
                 }
             case "user_joined":
-                if let role = json["role"] as? String,
+                if let peerRole = json["peer_role"] as? String,
                    let peerUserId = json["peer_user_id"] as? String,
                    let publicKeyBase64 = json["peer_public_key"] as? String,
                    let publicKeyData = Data(base64Encoded: publicKeyBase64) {
@@ -288,7 +289,7 @@ extension ChatViewModel: WebSocketDelegate {
                         self.peerPublicKey = peerPublicKey
                         self.peerUserId = peerUserId
                         print("Received and set peer public key")
-                        self.messages.append(Message(content: "\(role.capitalized) joined, Encrypted channel established, enjoy!", isFromMe: false, isTyping: false, isSystem: true))
+                        self.messages.append(Message(content: "\(peerRole.capitalized) joined, Encrypted channel established, enjoy!", isFromMe: false, isTyping: false, isSystem: true))
                     } else {
                         print("Failed to create peer public key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
                     }
@@ -301,7 +302,6 @@ extension ChatViewModel: WebSocketDelegate {
                 self.messages.append(Message(content: "Host has left the room. The room is closed.", isFromMe: false, isTyping: false, isSystem: true))
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                     self.leaveRoom()
-                    self.messages = []
                 }
             case "typing":
                 if let encryptedAESKey = json["encrypted_aes_key"] as? String,
@@ -331,6 +331,10 @@ struct ContentView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var messageText: String = ""
     @FocusState private var isTextFieldFocused: Bool
+    
+    var canSendMessage: Bool {
+        return viewModel.peerPublicKey != nil
+    }
     
     var body: some View {
         ZStack {
@@ -412,7 +416,7 @@ struct ContentView: View {
     
     var inputArea: some View {
         HStack(spacing: 10) {
-            TextField("Type a message", text: $messageText)
+            TextField(canSendMessage ? "Type a message" : "Waiting for peer to join...", text: $messageText)
                 .padding(.horizontal, 15)
                 .padding(.vertical, 10)
                 .background(Color.white.opacity(0.2))
@@ -423,11 +427,16 @@ struct ContentView: View {
                 )
                 .focused($isTextFieldFocused)
                 .onChange(of: messageText) { newValue in
-                    viewModel.sendTyping(content: newValue)
+                    if canSendMessage {
+                        viewModel.sendTyping(content: newValue)
+                    }
                 }
                 .onSubmit {
-                    sendMessage()
+                    if canSendMessage {
+                        sendMessage()
+                    }
                 }
+                .disabled(!canSendMessage)
             
             Button(action: clearMessage) {
                 Image(systemName: "xmark.circle.fill")
@@ -437,7 +446,7 @@ struct ContentView: View {
                     .clipShape(Circle())
                     .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
             }
-            .disabled(messageText.isEmpty)
+            .disabled(messageText.isEmpty || !canSendMessage)
             
             Button(action: sendMessage) {
                 Image(systemName: "paperplane.fill")
@@ -447,7 +456,7 @@ struct ContentView: View {
                     .clipShape(Circle())
                     .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
             }
-            .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !canSendMessage)
         }
         .padding(.horizontal, 15)
         .padding(.vertical, 10)
@@ -455,10 +464,11 @@ struct ContentView: View {
     }
     
     private func sendMessage() {
-        //guard !messageText.isEmpty else { return }
-        viewModel.sendMessage(content: messageText)
-        messageText = ""
-        isTextFieldFocused = true // 发送消息后保持输入框焦点
+        if canSendMessage && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            viewModel.sendMessage(content: messageText)
+            messageText = ""
+            isTextFieldFocused = true
+        }
     }
     
     private func clearMessage() {
