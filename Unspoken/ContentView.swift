@@ -333,62 +333,18 @@ struct ContentView: View {
     @FocusState private var isTextFieldFocused: Bool
     
     var body: some View {
-        VStack {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack {
-                        ForEach(viewModel.messages) { message in
-                            if message.isSystem {
-                                Text(message.content)
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
-                                    .padding(.vertical, 4)
-                            } else {
-                                MessageView(message: message)
-                            }
-                        }
-                        if !viewModel.typingContent.isEmpty {
-                            MessageView(
-                                message: Message(
-                                    content: viewModel.typingContent,
-                                    isFromMe: false,
-                                    isTyping: true
-                                )
-                            )
-                        }
-                        Color.clear.frame(height: 1).id("bottom")
-                    }
-                }
-                .onChange(of: viewModel.messages.count) { _ in
-                    withAnimation {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-                .onChange(of: viewModel.typingContent) { _ in
-                    withAnimation {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-            }
+        ZStack {
+            LinearGradient(gradient: Gradient(colors: [Color.blue.opacity(0.4), Color.purple.opacity(0.4)]), startPoint: .topLeading, endPoint: .bottomTrailing)
+                .edgesIgnoringSafeArea(.all)
             
-            HStack {
-                TextField("Type a message", text: $messageText)
-                    .focused($isTextFieldFocused)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .onChange(of: messageText) { newValue in
-                        viewModel.sendTyping(content: newValue)
-                    }.onSubmit {
-                        sendMessage()
-                    }
-                Button("Send") {
-                    sendMessage()
-                }
-            }.padding()
+            VStack(spacing: 0) {
+                chatHeader
+                
+                chatMessages
+                
+                inputArea
+            }
         }
-        .navigationBarItems(leading: Text("Room: \(viewModel.roomId)"))
-        .navigationBarItems(trailing: Button("Leave") {
-            viewModel.leaveRoom()
-        })
         .alert(isPresented: .constant(!viewModel.isChatOpen && !viewModel.messages.isEmpty)) {
             Alert(
                 title: Text("Room Closed"),
@@ -400,11 +356,113 @@ struct ContentView: View {
         }
     }
     
+    var chatHeader: some View {
+        HStack {
+            Text("Room: \(viewModel.roomId)")
+                .font(.headline)
+                .foregroundColor(.white)
+            Spacer()
+            Button(action: {
+                viewModel.leaveRoom()
+            }) {
+                Text("Leave")
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.red.opacity(0.8))
+                    .cornerRadius(8)
+            }
+        }
+        .padding()
+        .background(Color.black.opacity(0.2))
+    }
+    
+    var chatMessages: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(viewModel.messages) { message in
+                        MessageView(message: message)
+                    }
+                    if !viewModel.typingContent.isEmpty {
+                        MessageView(
+                            message: Message(
+                                content: viewModel.typingContent,
+                                isFromMe: false,
+                                isTyping: true
+                            )
+                        )
+                    }
+                    Color.clear.frame(height: 1).id("bottom")
+                }
+                .padding(.horizontal, 8)
+            }
+            .onChange(of: viewModel.messages.count) { _ in
+                withAnimation {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            }
+            .onChange(of: viewModel.typingContent) { _ in
+                withAnimation {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            }
+        }
+    }
+    
+    var inputArea: some View {
+        HStack(spacing: 10) {
+            TextField("Type a message", text: $messageText)
+                .padding(.horizontal, 15)
+                .padding(.vertical, 10)
+                .background(Color.white.opacity(0.2))
+                .cornerRadius(20)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20)
+                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                )
+                .focused($isTextFieldFocused)
+                .onChange(of: messageText) { newValue in
+                    viewModel.sendTyping(content: newValue)
+                }
+                .onSubmit {
+                    sendMessage()
+                }
+            
+            Button(action: clearMessage) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Color.red.opacity(0.8))
+                    .clipShape(Circle())
+                    .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
+            }
+            .disabled(messageText.isEmpty)
+            
+            Button(action: sendMessage) {
+                Image(systemName: "paperplane.fill")
+                    .foregroundColor(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Color.blue)
+                    .clipShape(Circle())
+                    .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
+            }
+            .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.horizontal, 15)
+        .padding(.vertical, 10)
+        .background(Color.black.opacity(0.1))
+    }
+    
     private func sendMessage() {
         //guard !messageText.isEmpty else { return }
         viewModel.sendMessage(content: messageText)
         messageText = ""
         isTextFieldFocused = true // 发送消息后保持输入框焦点
+    }
+    
+    private func clearMessage() {
+        messageText = ""
     }
 }
 
@@ -412,19 +470,38 @@ struct MessageView: View {
     let message: Message
     
     var body: some View {
-        HStack {
-            if message.isFromMe {
-                Spacer()
+        Group {
+            if message.isSystem {
+                HStack {
+                    Spacer()
+                    Text(message.content)
+                        .font(.caption)
+                        .foregroundColor(.white)
+                        .padding(.vertical, 2)
+                        .padding(.horizontal, 8)
+                        .background(Color.gray.opacity(0.3))
+                        .cornerRadius(8)
+                    Spacer()
+                }
+            } else {
+                HStack {
+                    if message.isFromMe {
+                        Spacer()
+                    }
+                    Text(message.content)
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 10)
+                        .background(message.isFromMe ? Color.blue.opacity(message.isTyping ? 0.4 : 0.8) : Color.purple.opacity(message.isTyping ? 0.4 : 0.8))
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                        .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+                    if !message.isFromMe {
+                        Spacer()
+                    }
+                }
             }
-            Text(message.content)
-                .padding()
-                .background(message.isFromMe ? Color.green.opacity(message.isTyping ? 0.4 : 1) : Color.blue.opacity(message.isTyping ? 0.4 : 1))
-                .foregroundColor(.white)
-                .cornerRadius(8)
-            if !message.isFromMe {
-                Spacer()
-            }
-        }.padding(.horizontal)
+        }
+        .padding(.vertical, 1)
     }
 }
 
