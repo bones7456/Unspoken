@@ -53,20 +53,24 @@
         }
         .features {
             display: flex;
+            flex-wrap: wrap;
             justify-content: space-between;
             margin-top: 60px;
         }
         .feature {
-            flex-basis: 30%;
+            flex-basis: calc(33.333% - 20px);
             text-align: center;
+            margin-bottom: 30px;
         }
-        .feature h3 {
-            font-size: 24px;
-            font-weight: 600;
+        @media (max-width: 768px) {
+            .feature {
+                flex-basis: calc(50% - 15px);
+            }
         }
-        .feature p {
-            font-size: 17px;
-            color: #6e6e73;
+        @media (max-width: 480px) {
+            .feature {
+                flex-basis: 100%;
+            }
         }
         .cta {
             text-align: center;
@@ -106,17 +110,29 @@
                 <p>See your contact's thoughts form in a live gray bubble.</p>
             </div>
             <div class="feature">
-                <h3>Instant Send</h3>
-                <p>Press Enter to solidify your message into a permanent bubble.</p>
+                <h3>End-to-End Encryption</h3>
+                <p>Fully encrypted, even the server can't decrypt. New random key for each session.</p>
+            </div>
+            <div class="feature">
+                <h3>Open Source</h3>
+                <p>Set up your own dedicated server with our open-source code.</p>
             </div>
             <div class="feature">
                 <h3>One-on-One Focus</h3>
                 <p>Designed for intimate, personal conversations.</p>
             </div>
+            <div class="feature">
+                <h3>Lightweight</h3>
+                <p>Minimal resource usage for smooth performance on any device.</p>
+            </div>
+            <div class="feature">
+                <h3>Elegant Interface</h3>
+                <p>Clean and intuitive design for a seamless chat experience.</p>
+            </div>
         </div>
 
         <div class="cta">
-            <a href="https://github.com/bones7456/Unspoken" class="cta-button">Download Unspoken</a>
+            <a href="https://github.com/bones7456/Unspoken" class="cta-button">Download Or Deploy</a>
         </div>
     </main>
 </body>
