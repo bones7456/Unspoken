@@ -337,16 +337,19 @@ struct ContentView: View {
     }
     
     var body: some View {
-        ZStack {
-            LinearGradient(gradient: Gradient(colors: [Color.blue.opacity(0.4), Color.purple.opacity(0.4)]), startPoint: .topLeading, endPoint: .bottomTrailing)
-                .edgesIgnoringSafeArea(.all)
-            
-            VStack(spacing: 0) {
-                chatHeader
+        GeometryReader { geometry in
+            ZStack {
+                LinearGradient(gradient: Gradient(colors: [Color.blue.opacity(0.4), Color.purple.opacity(0.4)]), startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .edgesIgnoringSafeArea(.all)
                 
-                chatMessages
-                
-                inputArea
+                VStack(spacing: 0) {
+                    chatHeader
+                    
+                    chatMessages
+                    
+                    inputArea
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .alert(isPresented: .constant(!viewModel.isChatOpen && !viewModel.messages.isEmpty)) {
