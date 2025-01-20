@@ -34,7 +34,7 @@ struct RoomSelectionView: View {
     @State private var inputRoomId: String = ""
     @State private var errorMessage: String?
     @State private var agreeToTerms = true
-    @State private var serverAddress: String = "18.138.249.97"
+    @State private var serverAddress: String = "unspoken.luy.li"
     @State private var serverPort: String = "8765"
     @State private var isJoining = false
     @State private var isCreating = false

@@ -21,7 +21,7 @@ def log_message(direction, user_id, message):
         direction_symbol = ">>" if direction == "RECEIVED" else "<<"
     print(f"[{timestamp}] {direction_symbol} {user_id}: {message}")
 
-async def handle_connection(websocket, path):
+async def handle_connection(websocket):
     user_id = None
     try:
         async for message in websocket:
@@ -207,8 +207,10 @@ async def cleanup_user(user_id):
 if __name__ == '__main__':
     HOST = "0.0.0.0"
     PORT = 8765
-    log_message("SYSTEM", "Server", f"Starting server at {HOST}:{PORT}")
-    start_server = websockets.serve(handle_connection, HOST, PORT)
-
-    asyncio.get_event_loop().run_until_complete(start_server)
-    asyncio.get_event_loop().run_forever()
+    
+    async def main():
+        log_message("SYSTEM", "Server", f"Starting server at {HOST}:{PORT}")
+        async with websockets.serve(handle_connection, HOST, PORT):
+            await asyncio.Future()  # 运行直到被取消
+    
+    asyncio.run(main())

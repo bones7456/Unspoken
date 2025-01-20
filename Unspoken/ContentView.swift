@@ -14,7 +14,7 @@ class ChatViewModel: ObservableObject {
     @Published var typingContent: String = ""
     @Published var isChatOpen: Bool = false
     @Published var roomId: String = ""
-    @Published var serverAddress: String = "ws://18.138.249.97:8765"
+    @Published var serverAddress: String = "ws://unspoken.luy.li:8765"
     @Published var role: String = ""
     
     private var socket: WebSocket?
@@ -330,6 +330,7 @@ extension ChatViewModel: WebSocketDelegate {
 struct ContentView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var messageText: String = ""
+    @State private var showBlockedWordAlert: Bool = false
     @FocusState private var isTextFieldFocused: Bool
     
     var canSendMessage: Bool {
@@ -360,6 +361,11 @@ struct ContentView: View {
                     viewModel.messages = []
                 }
             )
+        }
+        .alert("Notice", isPresented: $showBlockedWordAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Message contains blocked words. Please modify and try again.")
         }
     }
     
@@ -466,7 +472,22 @@ struct ContentView: View {
         .background(Color.black.opacity(0.1))
     }
     
+    //iOS	 app上架审核需要有这个功能
+    func canSend(content: String) -> Bool {
+        let blockedWords = ["badword1", "badword2", "some_sensitive_word"]
+        for word in blockedWords {
+            if content.lowercased().contains(word) {
+                return false
+            }
+        }
+        return true
+    }
+    
     private func sendMessage() {
+        guard canSend(content: messageText) else {
+            showBlockedWordAlert = true
+            return
+        }
         if canSendMessage && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             viewModel.sendMessage(content: messageText)
             messageText = ""
