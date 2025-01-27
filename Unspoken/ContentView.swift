@@ -474,7 +474,7 @@ struct ContentView: View {
     
     //iOS	 app上架审核需要有这个功能
     func canSend(content: String) -> Bool {
-        let blockedWords = ["badword1", "badword2", "some_sensitive_word"]
+        let blockedWords = ["badword1", "badword2", "fuck", "shit", "ass", "asshole", "bastard", "bitch", "damn", "dick", "douche", "fag", "faggot", "hell", "piss", "slut", "whore", "cunt", "crap", "jerk", "balls", "prick", "cock", "wanker", "retard", "moron", "damn", "bloody", "bollocks" ]
         for word in blockedWords {
             if content.lowercased().contains(word) {
                 return false
