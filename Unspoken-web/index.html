@@ -17,6 +17,7 @@
       flex-direction: column;
       color: #fff;
     }
+    /* 顶部标题 */
     header {
       background: rgba(0,0,0,0.2);
       padding: 10px;
@@ -26,24 +27,23 @@
       font-size: 1.5rem;
       color: #fff;
     }
+
+    /* 主体区域，撑开剩余高度 */
     main {
       flex: 1;
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      margin-top: 10px;
     }
 
-    /* ========================================= */
-    /* 初始配置区域: Server/Port, Create/Join按钮 */
-    /* ========================================= */
+    /* 初始配置容器（含server/port, create/join），上下左右居中 */
     .config-container {
+      flex: 1;  
       display: flex;
       flex-direction: column;
-      align-items: center;    /* 水平居中 */
-      justify-content: center;/* 垂直居中 */
-      margin-top: 20px;
-      gap: 10px;
+      align-items: center;  
+      justify-content: center; 
+      gap: 20px;
     }
     .config-area, .room-area {
       display: flex;
@@ -69,7 +69,7 @@
       display: none !important;
     }
 
-    /* ============ 聊天头部 ============ */
+    /* 聊天头部(房间信息 + Leave按钮) */
     .chat-header {
       display: flex;
       justify-content: space-between;
@@ -86,7 +86,7 @@
       cursor: pointer;
     }
 
-    /* ============ 消息列表 ============ */
+    /* 消息列表 */
     .messages-container {
       flex: 1;
       overflow-y: auto;
@@ -126,7 +126,7 @@
       opacity: 0.7;
     }
 
-    /* ============ 输入框区域 ============ */
+    /* 输入框区域 */
     .input-area {
       display: flex;
       align-items: center;
@@ -162,7 +162,7 @@
       background: #3b82f6; /* Send 按钮颜色 */
     }
 
-    /* ============ 敏感词提示框 ============ */
+    /* 敏感词提示 */
     .alert {
       position: fixed;
       left: 50%;
@@ -182,23 +182,20 @@
     <h1>Unspoken</h1>
   </header>
 
-  <!-- 配置和房间按钮区域 -->
-  <div class="config-container" id="configContainer">
-    <!-- WebSocket服务器配置 -->
-    <div class="config-area">
-      <input type="text" id="serverAddress" placeholder="Server Address" value="unspoken.luy.li">
-      <input type="text" id="serverPort" placeholder="Port" value="8765">
-      <button id="connectBtn">Connect</button>
-    </div>
-    <!-- 创建/加入房间 -->
-    <div class="room-area">
-      <input type="text" id="roomIdInput" placeholder="Room ID to join">
-      <button id="createRoomBtn">Create Room</button>
-      <button id="joinRoomBtn">Join Room</button>
-    </div>
-  </div>
-
   <main>
+    <!-- 初始配置: 服务器/端口 + 房间操作 -->
+    <div class="config-container" id="configContainer">
+      <div class="config-area">
+        <input type="text" id="serverAddress" placeholder="Server Address" value="unspoken.luy.li" />
+        <input type="text" id="serverPort" placeholder="Port" value="8765" />
+      </div>
+      <div class="room-area">
+        <input type="text" id="roomIdInput" placeholder="Room ID to join">
+        <button id="createRoomBtn">Create Room</button>
+        <button id="joinRoomBtn">Join Room</button>
+      </div>
+    </div>
+
     <!-- 聊天头部 (房间信息, 离开按钮) -->
     <div class="chat-header hidden" id="chatHeader">
       <span id="roomInfo">Room: </span>
@@ -211,18 +208,17 @@
     <!-- 输入框区域 -->
     <div class="input-area hidden" id="inputArea">
       <input type="text" id="messageInput" placeholder="Type a message...">
-      <!-- 清空输入框的按钮 -->
       <button id="clearBtn" class="circle-btn clear-btn">X</button>
-      <!-- 发送按钮 -->
       <button id="sendBtn" class="circle-btn send-btn">&#x27A4;</button>
     </div>
   </main>
 
-  <!-- 敏感词警告提示 -->
+  <!-- 敏感词警告 -->
   <div class="alert" id="alertBox">Message contains blocked words. Please modify and try again.</div>
 
 <script>
-/** ========== 全局状态 ========== */
+
+/** ======================== 全局状态 ======================== */
 let socket = null;
 let userId = generateUUID();
 let privateKey = null; 
@@ -233,11 +229,10 @@ let roomId = "";
 let role = "";
 let isChatOpen = false;
 
-/** ========== DOM 元素 ========== */
+/** ======================== DOM 元素 ======================== */
 const configContainer = document.getElementById('configContainer');
 const serverAddressInput = document.getElementById('serverAddress');
 const serverPortInput = document.getElementById('serverPort');
-const connectBtn = document.getElementById('connectBtn');
 
 const createRoomBtn = document.getElementById('createRoomBtn');
 const joinRoomBtn = document.getElementById('joinRoomBtn');
@@ -255,7 +250,7 @@ const clearBtn = document.getElementById('clearBtn');
 
 const alertBox = document.getElementById('alertBox');
 
-/** ========== 敏感词过滤 ========== */
+/** ======================== 敏感词过滤 ======================== */
 const blockedWords = [
   "badword1","badword2","fuck","shit","ass","asshole","bastard","bitch","damn","dick","douche","fag","faggot","hell","piss","slut","whore","cunt","crap","jerk","balls","prick","cock","wanker","retard","moron","damn","bloody","bollocks"
 ];
@@ -269,294 +264,32 @@ function containsBlockedWord(content) {
   return false;
 }
 
-/** ========== 生成 UUID ========== */
+/** ======================== UUID生成 ======================== */
 function generateUUID() {
   return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
     (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
   );
 }
 
-/** ========== 生成RSA密钥对 ========== */
-async function generateKeyPair() {
-  return await crypto.subtle.generateKey(
-    {
-      name: "RSA-OAEP",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
-      hash: "SHA-256",
-    },
-    true,
-    ["encrypt", "decrypt"]
-  );
-}
-
-/** ========== 导出本地公钥为Base64(SPKI) ========== */
-async function exportPublicKey(key) {
-  const spki = await crypto.subtle.exportKey("spki", key);
-  return btoa(String.fromCharCode(...new Uint8Array(spki)));
-}
-
 /** 
- * 尝试把 base64 公钥直接当 SPKI 导入；
- * 如果失败则视为 PKCS#1 格式，wrap到 SPKI 再导入。
+ * 当点击 "Create Room" 或 "Join Room" 时:
+ * 1. 若尚未连接或已断开 => 生成密钥对 => 连接WS => onopen里先sendLogin => 再send create_room / join_room
+ * 2. 若已连接并假设已登录 => 直接发送 create_room / join_room
  */
-async function importPeerPublicKey(base64) {
-  const bin = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-  try {
-    return await crypto.subtle.importKey(
-      "spki",
-      bin,
-      { name: "RSA-OAEP", hash: "SHA-256" },
-      true,
-      ["encrypt"]
-    );
-  } catch (err) {
-    console.warn("Direct SPKI import failed:", err, "\nTry wrap PKCS#1 -> SPKI...");
-    // 若失败，则包装一下
-    const wrapped = wrapPkcs1ToSpki(bin);
-    // 再次导入
-    return crypto.subtle.importKey(
-      "spki",
-      wrapped,
-      { name: "RSA-OAEP", hash: "SHA-256" },
-      true,
-      ["encrypt"]
-    );
-  }
+function onCreateRoom() {
+  initConnectionThenAction("create");
 }
-
-/** 
- * 将 PKCS#1 格式的公钥(仅含 n,e) 包装成 SPKI 格式:
- * SubjectPublicKeyInfo = SEQ {
- *   SEQ { OID 1.2.840.113549.1.1.1, NULL },
- *   BIT STRING { RSAPublicKey (PKCS#1) }
- * }
- */
-function wrapPkcs1ToSpki(pkcs1Bytes) {
-  // OID: 1.2.840.113549.1.1.1 => rsaEncryption
-  // ASN.1: 0x30,0x0D, 0x06,0x09, 2A864886F70D010101, 0x05,0x00
-  const rsaOID = new Uint8Array([
-    0x30,0x0D,
-    0x06,0x09, 0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x01,0x01,
-    0x05,0x00
-  ]);
-  
-  // BIT STRING = 0x03 + length + 0x00 + pkcs1Bytes
-  const pkcs1Len = pkcs1Bytes.length;
-  const bitStringLen = pkcs1Len + 1; // +1 for 'unused bits' byte
-  const bitStringLenBytes = derEncodedLength(bitStringLen);
-  const bitStringTotalLen = 1 + bitStringLenBytes.length + 1 + pkcs1Len; 
-  // 1 for tag (0x03), bitStringLenBytes.length for length, 1 for unused bits
-
-  const seq1Len = rsaOID.length; // 0x30 0x0D ... up to 0x05 0x00
-  const totalLen = seq1Len + bitStringTotalLen;
-
-  // Outer SEQ length
-  const fullSeqLenBytes = derEncodedLength(totalLen);
-
-  // 构造 SPKI 二进制
-  const spki = new Uint8Array(1 + fullSeqLenBytes.length + totalLen);
-  let offset = 0;
-
-  // 0x30 => SEQ
-  spki[offset++] = 0x30;
-  // 写入完整长度
-  fullSeqLenBytes.forEach(b => spki[offset++] = b);
-  
-  // 写入 rsaOID
-  rsaOID.forEach(b => spki[offset++] = b);
-
-  // 写入 BIT STRING tag
-  spki[offset++] = 0x03;
-  // 写入长度
-  bitStringLenBytes.forEach(b => spki[offset++] = b);
-  // 写入 unused bits = 0
-  spki[offset++] = 0x00;
-  // 写入 pkcs1 公钥主体
-  pkcs1Bytes.forEach(b => spki[offset++] = b);
-
-  return spki;
+function onJoinRoom() {
+  initConnectionThenAction("join");
 }
-
-/** ========== 辅助：DER 编码 length ========== */
-function derEncodedLength(n) {
-  // 若 n < 128，直接单字节
-  if (n < 128) return new Uint8Array([n]);
-  // 否则多字节
-  const bytes = [];
-  while(n > 0) {
-    bytes.unshift(n & 0xFF);
-    n >>= 8;
-  }
-  // 长度 = 0x80 | bytes.length
-  bytes.unshift(0x80 | bytes.length);
-  return new Uint8Array(bytes);
-}
-
-/** ========== 加密: 生成AES密钥->加密消息->RSA加密AES密钥 ========== */
-async function encryptMessage(msg) {
-  if (!peerPublicKey) {
-    console.log("Peer public key not available");
-    return null;
-  }
-  // 1) 生成随机AES密钥
-  const aesKey = await crypto.subtle.generateKey(
-    { name: "AES-GCM", length: 256 },
-    true,
-    ["encrypt", "decrypt"]
-  );
-  
-  // 2) AES GCM 加密
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encodedMsg = new TextEncoder().encode(msg);
-  const encryptedMsg = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    aesKey,
-    encodedMsg
-  );
-  
-  // 3) 导出原始AES密钥
-  const rawAesKey = await crypto.subtle.exportKey("raw", aesKey);
-  
-  // 4) RSA加密AES密钥
-  const encryptedAesKey = await crypto.subtle.encrypt(
-    { name: "RSA-OAEP" },
-    peerPublicKey,
-    rawAesKey
-  );
-  
-  // 合并IV和CipherText
-  const combined = new Uint8Array(iv.byteLength + encryptedMsg.byteLength);
-  combined.set(iv, 0);
-  combined.set(new Uint8Array(encryptedMsg), iv.byteLength);
-  
-  return {
-    encryptedAesKey: btoa(String.fromCharCode(...new Uint8Array(encryptedAesKey))),
-    encryptedContent: btoa(String.fromCharCode(...combined))
-  };
-}
-
-/** ========== 解密: RSA解AES密钥->AES解消息 ========== */
-async function decryptMessage(encryptedAesKeyB64, encryptedContentB64) {
-  if (!privateKey) {
-    console.log("Private key not available");
-    return null;
-  }
-  try {
-    const encryptedAesKey = Uint8Array.from(atob(encryptedAesKeyB64), c => c.charCodeAt(0));
-    const combined = Uint8Array.from(atob(encryptedContentB64), c => c.charCodeAt(0));
-    
-    // RSA解AES密钥
-    const rawAesKey = await crypto.subtle.decrypt(
-      { name: "RSA-OAEP" },
-      privateKey,
-      encryptedAesKey
-    );
-    const aesKey = await crypto.subtle.importKey(
-      "raw",
-      rawAesKey,
-      { name: "AES-GCM" },
-      false,
-      ["decrypt"]
-    );
-    
-    // 分离IV
-    const iv = combined.slice(0, 12);
-    const ciphertext = combined.slice(12);
-    
-    // AES-GCM 解密
-    const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv },
-      aesKey,
-      ciphertext
-    );
-    return new TextDecoder().decode(decrypted);
-  } catch (e) {
-    console.error("Message decryption failed:", e);
-    return null;
-  }
-}
-
-/** ========== 连接WebSocket ========== */
-function connectWebSocket() {
-  const url = `ws://${serverAddressInput.value}:${serverPortInput.value}`;
-  console.log("Connecting to:", url);
-  socket = new WebSocket(url);
-  
-  socket.onopen = () => {
-    console.log("WebSocket connected");
-    // 连接成功后立即发送登录
-    sendLogin();
-  };
-  
-  socket.onclose = () => {
-    console.log("WebSocket disconnected");
-  };
-  
-  socket.onerror = (err) => {
-    console.log("WebSocket error:", err);
-  };
-  
-  socket.onmessage = async (event) => {
-    handleServerMessage(event.data);
-  };
-}
-
-/** ========== 发送JSON封装 ========== */
-function sendJSON(obj) {
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    console.log("WebSocket not open, cannot send", obj);
-    return;
-  }
-  const str = JSON.stringify(obj);
-  socket.send(str);
-  console.log("SEND:", str);
-}
-
-/** ========== 发送登录 ========== */
-async function sendLogin() {
-  if (!publicKey) return;
-  const publicKeyBase64 = await exportPublicKey(publicKey);
-  const message = {
-    action: "login",
-    user_id: userId,
-    public_key: publicKeyBase64,
-  };
-  sendJSON(message);
-}
-
-/** ========== 创建房间 ========== */
-function createRoom() {
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    alert("WebSocket not connected.");
-    return;
-  }
-  sendJSON({ action: "create_room" });
-}
-
-/** ========== 加入房间 ========== */
-function joinRoom() {
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    alert("WebSocket not connected.");
-    return;
-  }
-  const rId = roomIdInput.value.trim();
-  if (!rId) {
-    alert("Please input Room ID");
-    return;
-  }
-  sendJSON({ action: "join_room", room_id: rId });
-}
-
-/** ========== 离开房间 ========== */
 function leaveRoom() {
   if (!roomId || !role) return;
   sendJSON({ action: "leave_room", room_id: roomId, role });
   resetRoomUI();
 }
-
 /** ========== 发送Typing ========== */
 async function sendTyping(content) {
+  if (!content) return;
   const encrypted = await encryptMessage(content);
   if (!encrypted) return;
   
@@ -568,7 +301,6 @@ async function sendTyping(content) {
     encrypted_content: encrypted.encryptedContent,
   });
 }
-
 /** ========== 发送消息 ========== */
 async function sendMessage() {
   const content = messageInput.value.trim();
@@ -587,13 +319,11 @@ async function sendMessage() {
     encrypted_aes_key: encrypted.encryptedAesKey,
     encrypted_content: encrypted.encryptedContent,
   });
-
-  // 自己先在消息区显示
+  // 自己先显示
   appendMessage(content, true, false);
   messageInput.value = "";
 }
-
-/** ========== 显示消息 ========== */
+/** ========== 显示消息到聊天面板 ========== */
 function appendMessage(content, isFromMe, isSystem = false, isTyping = false) {
   const msgDiv = document.createElement('div');
   msgDiv.classList.add('message');
@@ -616,8 +346,247 @@ function appendMessage(content, isFromMe, isSystem = false, isTyping = false) {
   messagesContainer.appendChild(msgDiv);
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
+/**
+ * 如果 socket 未连接或已关闭 -> 先 connect -> onopen 中再发送 login -> action
+ * 如果已连 -> 直接发 action
+ */
+async function initConnectionThenAction(action) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    // 先关掉旧的连接(万一是CLOSED)
+    if (socket) socket.close();
+    
+    // 生成RSA密钥
+    const keys = await crypto.subtle.generateKey(
+      {
+        name: "RSA-OAEP",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
+        hash: "SHA-256",
+      },
+      true,
+      ["encrypt", "decrypt"]
+    );
+    privateKey = keys.privateKey;
+    publicKey = keys.publicKey;
+    console.log("Key pair generated. userId:", userId);
 
-/** ========== 处理服务器消息 ========== */
+    // 连接WebSocket
+    const url = `ws://${serverAddressInput.value}:${serverPortInput.value}`;
+    console.log("Connecting to:", url);
+    socket = new WebSocket(url);
+
+    // 让 onopen 成为异步函数
+    socket.onopen = async () => {
+      console.log("WebSocket connected");
+
+      // 1) sendLogin (等待它完成发送)
+      await sendLogin(); // 这一步会先把 login 发出去
+
+      // 2) 再发送 create_room or join_room
+      if (action === "create") {
+        sendJSON({ action: "create_room" });
+      } else if (action === "join") {
+        const rId = roomIdInput.value.trim();
+        if (!rId) {
+          alert("Please input Room ID");
+          return;
+        }
+        sendJSON({ action: "join_room", room_id: rId });
+      }
+    };
+
+    socket.onerror = (err) => {
+      console.log("WebSocket error:", err);
+    };
+    socket.onclose = () => {
+      console.log("WebSocket disconnected");
+    };
+    socket.onmessage = (event) => {
+      handleServerMessage(event.data);
+    };
+
+  } else {
+    // 若 socket 已连, 假设已经 login 过 -> 直接发
+    if (action === "create") {
+      sendJSON({ action: "create_room" });
+    } else if (action === "join") {
+      const rId = roomIdInput.value.trim();
+      if (!rId) {
+        alert("Please input Room ID");
+        return;
+      }
+      sendJSON({ action: "join_room", room_id: rId });
+    }
+  }
+}
+
+/** ========== 发送 login ========== 
+ * 注意这里用 async/await，确保先导出公钥再发送JSON
+ */
+async function sendLogin() {
+  if (!publicKey) return;
+  const publicKeyBase64 = await exportPublicKey(publicKey);
+  const message = {
+    action: "login",
+    user_id: userId,
+    public_key: publicKeyBase64,
+  };
+  sendJSON(message);
+}
+
+/** ========== 导出本地公钥为Base64(SPKI) ========== */
+async function exportPublicKey(key) {
+  const spki = await crypto.subtle.exportKey("spki", key);
+  return btoa(String.fromCharCode(...new Uint8Array(spki)));
+}
+
+/** ========== 发送JSON封装 ========== */
+function sendJSON(obj) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    console.log("WebSocket not open, cannot send", obj);
+    return;
+  }
+  const str = JSON.stringify(obj);
+  socket.send(str);
+  console.log("SEND:", str);
+}
+
+/** ========== 导入对方公钥(若是PKCS#1则转换) ========== */
+async function importPeerPublicKey(base64) {
+  const bin = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  try {
+    return await crypto.subtle.importKey(
+      "spki",
+      bin,
+      { name: "RSA-OAEP", hash: "SHA-256" },
+      true,
+      ["encrypt"]
+    );
+  } catch (err) {
+    console.warn("Direct SPKI import failed:", err, "\nTry wrap PKCS#1 -> SPKI...");
+    const wrapped = wrapPkcs1ToSpki(bin);
+    return crypto.subtle.importKey(
+      "spki",
+      wrapped,
+      { name: "RSA-OAEP", hash: "SHA-256" },
+      true,
+      ["encrypt"]
+    );
+  }
+}
+
+/** 
+ * 将 PKCS#1 公钥(仅 n,e) 包装成标准 SPKI
+ */
+function wrapPkcs1ToSpki(pkcs1Bytes) {
+  // rsaEncryption OID = 1.2.840.113549.1.1.1
+  const rsaOID = new Uint8Array([
+    0x30,0x0D,
+    0x06,0x09, 0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x01,0x01,
+    0x05,0x00
+  ]);
+  
+  // BIT STRING 包裹 PKCS#1
+  const pkcs1Len = pkcs1Bytes.length;
+  const bitStringLen = pkcs1Len + 1;
+  const bitStringLenBytes = derEncodedLength(bitStringLen);
+  const bitStringTotalLen = 1 + bitStringLenBytes.length + 1 + pkcs1Len;
+
+  const seq1Len = rsaOID.length;
+  const totalLen = seq1Len + bitStringTotalLen;
+  const fullSeqLenBytes = derEncodedLength(totalLen);
+
+  const spki = new Uint8Array(1 + fullSeqLenBytes.length + totalLen);
+  let offset = 0;
+
+  // 0x30 => SEQ
+  spki[offset++] = 0x30;
+  fullSeqLenBytes.forEach(b => spki[offset++] = b);
+  
+  // OID
+  rsaOID.forEach(b => spki[offset++] = b);
+
+  // BIT STRING
+  spki[offset++] = 0x03;
+  bitStringLenBytes.forEach(b => spki[offset++] = b);
+  spki[offset++] = 0x00; // unused bits
+  pkcs1Bytes.forEach(b => spki[offset++] = b);
+
+  return spki;
+}
+
+/** ========== DER 编码长度 ========== */
+function derEncodedLength(n) {
+  if (n < 128) return new Uint8Array([n]);
+  const bytes = [];
+  while(n > 0) {
+    bytes.unshift(n & 0xFF);
+    n >>= 8;
+  }
+  bytes.unshift(0x80 | bytes.length);
+  return new Uint8Array(bytes);
+}
+
+/** ========== 加密(AES-GCM + RSA-OAEP) ========== */
+async function encryptMessage(msg) {
+  if (!peerPublicKey) {
+    console.log("Peer public key not available");
+    return null;
+  }
+  // 1) 生成AES密钥
+  const aesKey = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"]
+  );
+  // 2) AES GCM 加密
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encodedMsg = new TextEncoder().encode(msg);
+  const encryptedMsg = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, encodedMsg);
+  // 3) 导出AES密钥
+  const rawAesKey = await crypto.subtle.exportKey("raw", aesKey);
+  // 4) RSA加密AES密钥
+  const encryptedAesKey = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, peerPublicKey, rawAesKey);
+
+  // 合并IV + ciphertext
+  const combined = new Uint8Array(iv.byteLength + encryptedMsg.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(encryptedMsg), iv.byteLength);
+
+  return {
+    encryptedAesKey: btoa(String.fromCharCode(...new Uint8Array(encryptedAesKey))),
+    encryptedContent: btoa(String.fromCharCode(...combined))
+  };
+}
+
+/** ========== 解密(RSA-OAEP + AES-GCM) ========== */
+async function decryptMessage(encryptedAesKeyB64, encryptedContentB64) {
+  if (!privateKey) {
+    console.log("Private key not available");
+    return null;
+  }
+  try {
+    const encryptedAesKey = Uint8Array.from(atob(encryptedAesKeyB64), c => c.charCodeAt(0));
+    const combined = Uint8Array.from(atob(encryptedContentB64), c => c.charCodeAt(0));
+    
+    // RSA解AES密钥
+    const rawAesKey = await crypto.subtle.decrypt({ name: "RSA-OAEP" }, privateKey, encryptedAesKey);
+    const aesKey = await crypto.subtle.importKey("raw", rawAesKey, { name: "AES-GCM" }, false, ["decrypt"]);
+
+    // 分离IV
+    const iv = combined.slice(0, 12);
+    const ciphertext = combined.slice(12);
+
+    // AES-GCM解密
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, aesKey, ciphertext);
+    return new TextDecoder().decode(decrypted);
+  } catch (e) {
+    console.error("Message decryption failed:", e);
+    return null;
+  }
+}
+
+/** ========== 处理服务器来的消息 ========== */
 async function handleServerMessage(msgStr) {
   console.log("RECEIVED:", msgStr);
   let data;
@@ -697,33 +666,28 @@ function removeTypingIndicator() {
   bubbles.forEach(b => b.parentElement.remove());
 }
 
-/** ========== 更新UI(进入聊天) ========== */
+/** ========== UI: 进入聊天后 ========== */
 function updateRoomUI() {
-  // 隐藏初始配置区域
   configContainer.classList.add('hidden');
-  // 显示聊天头部、输入区
   chatHeaderEl.classList.remove('hidden');
   inputArea.classList.remove('hidden');
   roomInfoEl.textContent = `Room: ${roomId}`;
 }
 
-/** ========== 重置UI(离开聊天) ========== */
+/** ========== UI: 离开聊天，恢复初始 ========== */
 function resetRoomUI() {
   isChatOpen = false;
   roomId = "";
   role = "";
   peerPublicKey = null;
   peerUserId = null;
-  // 清空消息
   messagesContainer.innerHTML = "";
-  // 隐藏聊天头部、输入区
   chatHeaderEl.classList.add('hidden');
   inputArea.classList.add('hidden');
-  // 显示初始配置区域
   configContainer.classList.remove('hidden');
 }
 
-/** ========== 弹出敏感词提示框 ========== */
+/** ========== 显示敏感词提示 ========== */
 function showAlert() {
   alertBox.style.display = 'block';
   setTimeout(() => {
@@ -731,20 +695,9 @@ function showAlert() {
   }, 2000);
 }
 
-/** ========== 事件监听 ========== */
-connectBtn.addEventListener('click', () => {
-  generateKeyPair().then(keys => {
-    privateKey = keys.privateKey;
-    publicKey = keys.publicKey;
-    console.log("Key pair generated. userId:", userId);
-    connectWebSocket();
-  }).catch(e => {
-    console.error("Generate key pair error:", e);
-  });
-});
-
-createRoomBtn.addEventListener('click', createRoom);
-joinRoomBtn.addEventListener('click', joinRoom);
+/** ========== 事件绑定 ========== */
+createRoomBtn.addEventListener('click', onCreateRoom);
+joinRoomBtn.addEventListener('click', onJoinRoom);
 leaveRoomBtn.addEventListener('click', leaveRoom);
 
 clearBtn.addEventListener('click', () => {
@@ -752,11 +705,10 @@ clearBtn.addEventListener('click', () => {
 });
 
 messageInput.addEventListener('input', () => {
-  if (isChatOpen && messageInput.value) {
+  if (isChatOpen) {
     sendTyping(messageInput.value);
   }
 });
-
 messageInput.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') {
     sendMessage();
