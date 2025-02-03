@@ -1,20 +1,673 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unspoken Web</title>
-    <link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8" />
+  <title>Web Chat Demo</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0; 
+      padding: 0;
+      font-family: sans-serif;
+    }
+    body {
+      background: linear-gradient(135deg, rgba(0,0,255,0.4), rgba(128,0,128,0.4));
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      color: #fff;
+    }
+    header, .chat-header {
+      background: rgba(0,0,0,0.2);
+      padding: 10px;
+    }
+    header h1 {
+      text-align: center;
+      font-size: 1.5rem;
+      color: #fff;
+    }
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    .config-area, .room-area {
+      display: flex;
+      gap: 5px;
+      padding: 10px;
+    }
+    .config-area input, .room-area input {
+      padding: 5px;
+      border-radius: 4px;
+      border: none;
+      flex: 1;
+    }
+    .config-area button, .room-area button {
+      padding: 5px 10px;
+      border: none;
+      background: rgba(0,0,0,0.3);
+      color: #fff;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .chat-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .chat-header button {
+      padding: 5px 10px;
+      border: none;
+      background: rgba(255,0,0,0.8);
+      color: #fff;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .messages-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+    }
+    .message {
+      margin: 5px 0;
+      display: flex;
+    }
+    .message.me {
+      justify-content: flex-end;
+    }
+    .message .bubble {
+      max-width: 60%;
+      padding: 8px 12px;
+      border-radius: 10px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      background: rgba(0,0,255,0.8); /* 我方消息底色 */
+    }
+    .message.me .bubble {
+      background: rgba(0,0,255,0.8);
+    }
+    .message.other .bubble {
+      background: rgba(128,0,128,0.8); /* 对方消息底色 */
+    }
+    .message.system {
+      justify-content: center;
+      color: #fff;
+      font-size: 0.85rem;
+    }
+    .message.system .bubble {
+      background: rgba(128,128,128,0.3);
+      text-align: center;
+    }
+    .typing-indicator {
+      font-style: italic;
+      opacity: 0.7;
+    }
+    .input-area {
+      display: flex;
+      align-items: center;
+      background: rgba(0,0,0,0.1);
+      padding: 10px;
+    }
+    .input-area input {
+      flex: 1;
+      border: none;
+      border-radius: 20px;
+      padding: 10px;
+      margin-right: 10px;
+      color: #000;
+    }
+    .input-area button {
+      width: 44px;
+      height: 44px;
+      background: #3b82f6; /* Send 按钮颜色 */
+      border: none;
+      border-radius: 50%;
+      color: #fff;
+      cursor: pointer;
+      font-size: 1.2rem;
+    }
+    .alert {
+      position: fixed;
+      left: 50%;
+      top: 10px;
+      transform: translateX(-50%);
+      background: rgba(255,0,0,0.8);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 4px;
+      display: none;
+    }
+  </style>
 </head>
 <body>
-    <div id="app">
-        <!-- 初始加载时显示的内容 -->
-        <div class="loading">
-            <h1>Unspoken</h1>
-            <p>正在加载应用...</p>
-        </div>
+  <header>
+    <h1>Web Chat Demo</h1>
+  </header>
+  
+  <!-- 服务器/端口配置 -->
+  <div class="config-area">
+    <input type="text" id="serverAddress" placeholder="Server Address" value="unspoken.luy.li">
+    <input type="text" id="serverPort" placeholder="Port" value="8765">
+    <button id="connectBtn">Connect</button>
+  </div>
+
+  <!-- 创建/加入房间 -->
+  <div class="room-area">
+    <input type="text" id="roomIdInput" placeholder="Room ID to join">
+    <button id="createRoomBtn">Create Room</button>
+    <button id="joinRoomBtn">Join Room</button>
+  </div>
+  
+  <main>
+    <!-- Chat Header (显示Room ID，离开房间按钮) -->
+    <div class="chat-header" style="display:none;">
+      <span id="roomInfo">Room: </span>
+      <button id="leaveRoomBtn">Leave</button>
     </div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
-    <script src="app.js"></script>
+
+    <!-- 消息列表 -->
+    <div class="messages-container" id="messagesContainer">
+      <!-- 动态加载消息 -->
+    </div>
+    
+    <!-- 输入框区域 -->
+    <div class="input-area" style="display:none;">
+      <input type="text" id="messageInput" placeholder="Type a message...">
+      <button id="sendBtn">&#x27A4;</button>
+    </div>
+  </main>
+  
+  <!-- 简单的敏感词警告提示 -->
+  <div class="alert" id="alertBox">Message contains blocked words. Please modify and try again.</div>
+
+<script>
+/** ========== 全局状态 ========== */
+let socket = null;
+let userId = generateUUID();
+let privateKey = null; 
+let publicKey = null; 
+let peerPublicKey = null; 
+let peerUserId = null;
+let roomId = "";
+let role = "";
+let isChatOpen = false;
+
+/** ========== DOM 元素 ========== */
+const serverAddressInput = document.getElementById('serverAddress');
+const serverPortInput = document.getElementById('serverPort');
+const connectBtn = document.getElementById('connectBtn');
+
+const createRoomBtn = document.getElementById('createRoomBtn');
+const joinRoomBtn = document.getElementById('joinRoomBtn');
+const roomIdInput = document.getElementById('roomIdInput');
+
+const chatHeaderEl = document.querySelector('.chat-header');
+const roomInfoEl = document.getElementById('roomInfo');
+const leaveRoomBtn = document.getElementById('leaveRoomBtn');
+
+const messagesContainer = document.getElementById('messagesContainer');
+const inputArea = document.querySelector('.input-area');
+const messageInput = document.getElementById('messageInput');
+const sendBtn = document.getElementById('sendBtn');
+
+const alertBox = document.getElementById('alertBox');
+
+/** ========== 敏感词过滤 ========== */
+const blockedWords = [
+  "badword1","badword2","fuck","shit","ass","asshole","bastard","bitch","damn","dick","douche","fag","faggot","hell","piss","slut","whore","cunt","crap","jerk","balls","prick","cock","wanker","retard","moron","damn","bloody","bollocks"
+];
+function containsBlockedWord(content) {
+  const lower = content.toLowerCase();
+  for (const w of blockedWords) {
+    if (lower.includes(w)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** ========== 生成 UUID ========== */
+function generateUUID() {
+  // 简易 UUID
+  return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+    (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+  );
+}
+
+/** ========== 生成RSA密钥对 ========== */
+async function generateKeyPair() {
+  // 使用RSA-OAEP, 2048位, SHA-256
+  return await crypto.subtle.generateKey(
+    {
+      name: "RSA-OAEP",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
+      hash: "SHA-256",
+    },
+    true,
+    ["encrypt", "decrypt"]
+  );
+}
+
+/** ========== 导出公钥为Base64 ========== */
+async function exportPublicKey(key) {
+  const spki = await crypto.subtle.exportKey("spki", key);
+  // 转成Base64
+  return btoa(String.fromCharCode(...new Uint8Array(spki)));
+}
+
+/** ========== 导入对方公钥 ========== */
+async function importPeerPublicKey(base64) {
+  const der = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  return await crypto.subtle.importKey(
+    "spki",
+    der,
+    { name: "RSA-OAEP", hash: "SHA-256" },
+    true,
+    ["encrypt"]
+  );
+}
+
+/** ========== 加密过程：生成AES密钥->加密消息->RSA加密AES密钥 ========== */
+async function encryptMessage(msg) {
+  if (!peerPublicKey) {
+    console.log("Peer public key not available");
+    return null;
+  }
+  
+  // 1) 生成随机AES密钥
+  const aesKey = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"]
+  );
+  
+  // 2) AES GCM 加密
+  const iv = crypto.getRandomValues(new Uint8Array(12)); // 12字节IV
+  const encodedMsg = new TextEncoder().encode(msg);
+  const encryptedMsg = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    aesKey,
+    encodedMsg
+  );
+  
+  // 3) 导出原始AES密钥
+  const rawAesKey = await crypto.subtle.exportKey("raw", aesKey);
+  
+  // 4) RSA加密AES密钥
+  const encryptedAesKey = await crypto.subtle.encrypt(
+    { name: "RSA-OAEP" },
+    peerPublicKey,
+    rawAesKey
+  );
+  
+  // 组合AES加密后的数据：iv + ciphertext
+  // (服务器端没有对IV进行拆分封装, 
+  // 这里简单地把IV和ciphertext合并成一段，再Base64)
+  const combined = new Uint8Array(iv.byteLength + encryptedMsg.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(encryptedMsg), iv.byteLength);
+  
+  return {
+    encryptedAesKey: btoa(String.fromCharCode(...new Uint8Array(encryptedAesKey))),
+    encryptedContent: btoa(String.fromCharCode(...combined))
+  };
+}
+
+/** ========== 解密过程：RSA解AES密钥->AES GCM解消息 ========== */
+async function decryptMessage(encryptedAesKeyB64, encryptedContentB64) {
+  if (!privateKey) {
+    console.log("Private key not available");
+    return null;
+  }
+  try {
+    // 1) Base64 -> ArrayBuffer
+    const encryptedAesKey = Uint8Array.from(atob(encryptedAesKeyB64), c => c.charCodeAt(0));
+    const combined = Uint8Array.from(atob(encryptedContentB64), c => c.charCodeAt(0));
+    
+    // 2) RSA解密AES密钥
+    const rawAesKey = await crypto.subtle.decrypt(
+      { name: "RSA-OAEP" },
+      privateKey,
+      encryptedAesKey
+    );
+    
+    // 3) 导入 AES 密钥
+    const aesKey = await crypto.subtle.importKey(
+      "raw",
+      rawAesKey,
+      { name: "AES-GCM" },
+      false,
+      ["decrypt"]
+    );
+    
+    // 4) 分离 iv 和 ciphertext
+    const iv = combined.slice(0, 12);
+    const ciphertext = combined.slice(12);
+    
+    // 5) AES-GCM 解密
+    const decrypted = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv },
+      aesKey,
+      ciphertext
+    );
+    
+    return new TextDecoder().decode(decrypted);
+  } catch (e) {
+    console.error("Message decryption failed:", e);
+    return null;
+  }
+}
+
+/** ========== 连接WebSocket ========== */
+function connectWebSocket() {
+  const url = `ws://${serverAddressInput.value}:${serverPortInput.value}`;
+  console.log("Connecting to:", url);
+  socket = new WebSocket(url);
+  
+  socket.onopen = () => {
+    console.log("WebSocket connected");
+    // 连接成功后立即发送登录
+    sendLogin();
+  };
+  
+  socket.onclose = () => {
+    console.log("WebSocket disconnected");
+  };
+  
+  socket.onerror = (err) => {
+    console.log("WebSocket error:", err);
+  };
+  
+  socket.onmessage = async (event) => {
+    // 处理服务器发来的消息
+    const msgStr = event.data;
+    handleServerMessage(msgStr);
+  };
+}
+
+/** ========== 发送JSON封装 ========== */
+function sendJSON(obj) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    console.log("WebSocket not open, cannot send", obj);
+    return;
+  }
+  const str = JSON.stringify(obj);
+  socket.send(str);
+  console.log("SEND:", str);
+}
+
+/** ========== 发送登录 ========== */
+async function sendLogin() {
+  if (!publicKey) return;
+  // 导出公钥Base64
+  const publicKeyBase64 = await exportPublicKey(publicKey);
+  const message = {
+    action: "login",
+    user_id: userId,
+    public_key: publicKeyBase64,
+  };
+  sendJSON(message);
+}
+
+/** ========== 创建房间 ========== */
+function createRoom() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    alert("WebSocket not connected.");
+    return;
+  }
+  const msg = { action: "create_room" };
+  sendJSON(msg);
+}
+
+/** ========== 加入房间 ========== */
+function joinRoom() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    alert("WebSocket not connected.");
+    return;
+  }
+  const rId = roomIdInput.value.trim();
+  if (!rId) {
+    alert("Please input Room ID");
+    return;
+  }
+  const msg = { action: "join_room", room_id: rId };
+  sendJSON(msg);
+}
+
+/** ========== 离开房间 ========== */
+function leaveRoom() {
+  if (!roomId || !role) {
+    return;
+  }
+  const msg = {
+    action: "leave_room",
+    room_id: roomId,
+    role: role,
+  };
+  sendJSON(msg);
+  resetRoomUI();
+}
+
+/** ========== 发送 Typing ========== */
+async function sendTyping(content) {
+  // 加密
+  const encrypted = await encryptMessage(content);
+  if (!encrypted) return;
+  
+  const msg = {
+    action: "typing",
+    room_id: roomId,
+    role: role,
+    encrypted_aes_key: encrypted.encryptedAesKey,
+    encrypted_content: encrypted.encryptedContent,
+  };
+  sendJSON(msg);
+}
+
+/** ========== 发送消息 ========== */
+async function sendMessage() {
+  let content = messageInput.value.trim();
+  if (!content) return;
+  // 敏感词检查
+  if (containsBlockedWord(content)) {
+    showAlert();
+    return;
+  }
+  
+  const encrypted = await encryptMessage(content);
+  if (!encrypted) return;
+  
+  const msg = {
+    action: "send_message",
+    room_id: roomId,
+    role: role,
+    encrypted_aes_key: encrypted.encryptedAesKey,
+    encrypted_content: encrypted.encryptedContent,
+  };
+  sendJSON(msg);
+
+  // 自己先在消息区显示
+  appendMessage(content, true, false);
+  messageInput.value = "";
+}
+
+/** ========== 显示消息到聊天区 ========== */
+function appendMessage(content, isFromMe, isSystem = false, isTyping = false) {
+  const msgDiv = document.createElement('div');
+  msgDiv.classList.add('message');
+  if (isSystem) {
+    msgDiv.classList.add('system');
+  } else if (isFromMe) {
+    msgDiv.classList.add('me');
+  } else {
+    msgDiv.classList.add('other');
+  }
+  
+  const bubbleDiv = document.createElement('div');
+  bubbleDiv.classList.add('bubble');
+  
+  if (isTyping) {
+    // typing 消息可显示特殊格式
+    bubbleDiv.classList.add('typing-indicator');
+  }
+  bubbleDiv.innerText = content;
+  msgDiv.appendChild(bubbleDiv);
+  
+  messagesContainer.appendChild(msgDiv);
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+/** ========== 处理服务器消息 ========== */
+async function handleServerMessage(msgStr) {
+  console.log("RECEIVED:", msgStr);
+  let data;
+  try {
+    data = JSON.parse(msgStr);
+  } catch (e) {
+    console.log("Invalid JSON:", e);
+    return;
+  }
+  const action = data.action || "";
+  
+  switch(action) {
+    case "room_created":
+    case "room_joined": {
+      // 显示房间ID, 角色, 打开聊天界面
+      roomId = data.room_id;
+      role = data.role;
+      isChatOpen = true;
+      updateRoomUI();
+      
+      // 如果服务器返回了peer信息, 则导入peer公钥
+      if (data.peer_user_id && data.peer_public_key) {
+        peerUserId = data.peer_user_id;
+        const pubKeyB64 = data.peer_public_key;
+        peerPublicKey = await importPeerPublicKey(pubKeyB64);
+        console.log("Imported peer public key, user:", peerUserId);
+        appendMessage("Encrypted channel established, enjoy!", false, true);
+      }
+      break;
+    }
+    case "user_joined": {
+      // 对方进来后，服务器给我们发peer信息
+      if (data.peer_user_id && data.peer_public_key) {
+        peerUserId = data.peer_user_id;
+        peerPublicKey = await importPeerPublicKey(data.peer_public_key);
+        console.log("Imported peer public key (on user_joined).");
+        appendMessage(`${data.peer_role} joined, Encrypted channel established, enjoy!`, false, true);
+      }
+      break;
+    }
+    case "user_left": {
+      appendMessage(`${data.role} has left the room.`, false, true);
+      break;
+    }
+    case "room_closed": {
+      appendMessage("Host has left the room. The room is closed.", false, true);
+      // 等待2秒后自动离开房间
+      setTimeout(() => {
+        leaveRoom();
+      }, 2000);
+      break;
+    }
+    case "typing": {
+      const decryptedContent = await decryptMessage(data.encrypted_aes_key, data.encrypted_content);
+      if (decryptedContent !== null) {
+        // 先把已有typing（可能只有一个）移除
+        removeTypingIndicator();
+        // 再添加新的typing
+        appendMessage(decryptedContent, false, false, true);
+      }
+      break;
+    }
+    case "new_message": {
+      const decryptedContent = await decryptMessage(data.encrypted_aes_key, data.encrypted_content);
+      if (decryptedContent !== null) {
+        // 收到正式消息就清除typing
+        removeTypingIndicator();
+        appendMessage(decryptedContent, false, false);
+      }
+      break;
+    }
+    case "error": {
+      console.error("Server Error:", data.message);
+      alert(data.message);
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+/** ========== 移除对方的typing消息 ========== */
+function removeTypingIndicator() {
+  const bubbles = messagesContainer.querySelectorAll('.message.other .bubble.typing-indicator');
+  bubbles.forEach(b => b.parentElement.remove());
+}
+
+/** ========== 更新UI（进入房间后） ========== */
+function updateRoomUI() {
+  if (isChatOpen) {
+    chatHeaderEl.style.display = 'flex';
+    inputArea.style.display = 'flex';
+    roomInfoEl.textContent = `Room: ${roomId}`;
+  }
+}
+
+/** ========== 重置UI（离开房间后） ========== */
+function resetRoomUI() {
+  isChatOpen = false;
+  roomId = "";
+  role = "";
+  peerPublicKey = null;
+  peerUserId = null;
+  chatHeaderEl.style.display = 'none';
+  inputArea.style.display = 'none';
+  messagesContainer.innerHTML = "";
+}
+
+/** ========== 弹出敏感词提示框 ========== */
+function showAlert() {
+  alertBox.style.display = 'block';
+  setTimeout(() => {
+    alertBox.style.display = 'none';
+  }, 2000);
+}
+
+/** ========== 事件监听 ========== */
+connectBtn.addEventListener('click', () => {
+  // 先生成RSA密钥对，然后再连接
+  generateKeyPair().then(keys => {
+    privateKey = keys.privateKey;
+    publicKey = keys.publicKey;
+    console.log("Key pair generated. userId:", userId);
+    connectWebSocket();
+  }).catch(e => {
+    console.error("Generate key pair error:", e);
+  });
+});
+
+createRoomBtn.addEventListener('click', createRoom);
+joinRoomBtn.addEventListener('click', joinRoom);
+leaveRoomBtn.addEventListener('click', () => {
+  leaveRoom();
+});
+
+messageInput.addEventListener('input', () => {
+  if (isChatOpen && messageInput.value) {
+    sendTyping(messageInput.value);
+  }
+});
+
+messageInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    sendMessage();
+  }
+});
+sendBtn.addEventListener('click', sendMessage);
+
+</script>
 </body>
 </html>
