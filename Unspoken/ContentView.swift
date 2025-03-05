@@ -14,7 +14,7 @@ class ChatViewModel: ObservableObject {
     @Published var typingContent: String = ""
     @Published var isChatOpen: Bool = false
     @Published var roomId: String = ""
-    @Published var serverAddress: String = "ws://unspoken.luy.li:8765"
+    @Published var serverAddress: String = "wss://unspoken.luy.li:8765"
     @Published var role: String = ""
     
     private var socket: WebSocket?
@@ -208,7 +208,7 @@ class ChatViewModel: ObservableObject {
     
     func updateServerAddress(address: String, port: String) {
         print("Server set to \(address):\(port)")
-        self.serverAddress = "ws://\(address):\(port)"
+        self.serverAddress = "wss://\(address):\(port)"
         setupWebSocket()
     }
 }
