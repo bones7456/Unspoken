@@ -2,6 +2,7 @@ import asyncio
 import websockets
 import json
 import uuid
+import ssl
 from datetime import datetime
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
@@ -207,10 +208,15 @@ async def cleanup_user(user_id):
 if __name__ == '__main__':
     HOST = "0.0.0.0"
     PORT = 8765
+    SSL_CERT = "etc/letsencrypt/live/unspoken.luy.li/fullchain.pem"
+    SSL_KEY = "/etc/letsencrypt/live/unspoken.luy.li/privkey.pem"
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_context.load_cert_chain(certfile=SSL_CERT, keyfile=SSL_KEY)
+
     
     async def main():
         log_message("SYSTEM", "Server", f"Starting server at {HOST}:{PORT}")
-        async with websockets.serve(handle_connection, HOST, PORT):
+        async with websockets.serve(handle_connection, HOST, PORT, ssl=ssl_context):
             await asyncio.Future()  # 运行直到被取消
     
     asyncio.run(main())
