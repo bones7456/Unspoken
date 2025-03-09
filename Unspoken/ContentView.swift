@@ -18,7 +18,7 @@ class ChatViewModel: ObservableObject {
     @Published var role: String = ""
     
     private var socket: WebSocket?
-    private var userId: String
+    private let userId: String = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
     
     private var privateKey: SecKey?
     private var publicKey: SecKey?
@@ -28,7 +28,7 @@ class ChatViewModel: ObservableObject {
     private var pendingAction: (() -> Void)?
     
     init() {
-        self.userId = UUID().uuidString
+        //self.userId =
         generateKeyPair()
         print("my userId:\(self.userId), Key pair generated.")
     }
@@ -61,7 +61,7 @@ class ChatViewModel: ObservableObject {
     func createRoom() {
         pendingAction = { [weak self] in
             self?.sendLogin()
-            self?.sendJSON(["action": "create_room"])
+            self?.sendJSON(["action": "create_room", "user_id": self?.userId as Any])
         }
     }
     
@@ -69,7 +69,7 @@ class ChatViewModel: ObservableObject {
         pendingAction = { [weak self] in
             self?.sendLogin()
             if let roomId = self?.roomId {
-                self?.sendJSON(["action": "join_room", "room_id": roomId])
+                self?.sendJSON(["action": "join_room", "room_id": roomId, "user_id": self?.userId as Any])
             }
         }
     }
@@ -211,6 +211,17 @@ class ChatViewModel: ObservableObject {
         self.serverAddress = "wss://\(address):\(port)"
         setupWebSocket()
     }
+    
+    func reportUser() {
+        guard let peerUserId = peerUserId else { return }
+        let message = [
+            "action": "report_user",
+            "reported_user_id": peerUserId
+        ]
+        sendJSON(message)
+        // 立即离开房间
+        leaveRoom()
+    }
 }
 
 extension ChatViewModel: WebSocketDelegate {
@@ -320,6 +331,12 @@ extension ChatViewModel: WebSocketDelegate {
                     print("Error: \(errorMessage)")
                     // You might want to show this error to the user
                 }
+            case "blocked":
+                if let errorMessage = json["message"] as? String {
+                    self.messages.append(Message(content: errorMessage, isFromMe: false, isTyping: false, isSystem: true))
+                }
+            case "login_failed":
+                print("login failed")
             default:
                 break
             }
@@ -395,7 +412,9 @@ struct ContentView: View {
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(viewModel.messages) { message in
-                        MessageView(message: message)
+                        MessageView(message: message) {
+                            viewModel.reportUser()
+                        }
                     }
                     if !viewModel.typingContent.isEmpty {
                         MessageView(
@@ -404,7 +423,9 @@ struct ContentView: View {
                                 isFromMe: false,
                                 isTyping: true
                             )
-                        )
+                        ) {
+                            viewModel.reportUser()
+                        }
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -502,6 +523,7 @@ struct ContentView: View {
 
 struct MessageView: View {
     let message: Message
+    let onReport: () -> Void
     
     var body: some View {
         Group {
@@ -529,6 +551,13 @@ struct MessageView: View {
                         .foregroundColor(.white)
                         .cornerRadius(10)
                         .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+                        .contextMenu {
+                            if !message.isFromMe && !message.isSystem {
+                                Button(role: .destructive, action: onReport) {
+                                    Label("Report User", systemImage: "exclamationmark.triangle")
+                                }
+                            }
+                        }
                     if !message.isFromMe {
                         Spacer()
                     }
