@@ -161,8 +161,13 @@ struct RoomSelectionView: View {
                                 .foregroundColor(.yellow)
                         }
                         .font(.footnote)
-                        .foregroundColor(.white)
-                        .padding(.horizontal)
+                        .foregroundColor(.gray)
+                        .padding(.top, 4)
+                        
+                        Text("To report inappropriate activity, please contact us at: bones7456+unspoken@gmail.com")
+                            .font(.footnote)
+                            .foregroundColor(.gray)
+                            .padding(.top, 4)
                     }
                     .padding()
                     .frame(minHeight: geometry.size.height)
