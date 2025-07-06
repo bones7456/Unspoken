@@ -372,7 +372,7 @@ async function initConnectionThenAction(action) {
     console.log("Key pair generated. userId:", userId);
 
     // 连接WebSocket
-    const url = `ws://${serverAddressInput.value}:${serverPortInput.value}`;
+    const url = `wss://${serverAddressInput.value}:${serverPortInput.value}`;
     console.log("Connecting to:", url);
     socket = new WebSocket(url);
 
@@ -385,14 +385,14 @@ async function initConnectionThenAction(action) {
 
       // 2) 再发送 create_room or join_room
       if (action === "create") {
-        sendJSON({ action: "create_room" });
+        sendJSON({ action: "create_room", "user_id": userId });
       } else if (action === "join") {
         const rId = roomIdInput.value.trim();
         if (!rId) {
           alert("Please input Room ID");
           return;
         }
-        sendJSON({ action: "join_room", room_id: rId });
+        sendJSON({ action: "join_room", "room_id": rId, "user_id": userId });
       }
     };
 
