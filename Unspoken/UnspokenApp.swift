@@ -24,18 +24,41 @@ struct UnspokenApp: App {
                 }
             }
             .navigationViewStyle(StackNavigationViewStyle())
+            .onOpenURL { url in
+                handleURL(url)
+            }
         }
+    }
+
+    private func handleURL(_ url: URL) {
+        // unspoken://host:port/room_id
+        guard let scheme = url.scheme, scheme == "unspoken",
+              let host = url.host,
+              !url.path.isEmpty else {
+            return
+        }
+
+        let port = url.port ?? 8765
+        let roomId = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard !roomId.isEmpty else { return }
+
+        // Update viewModel properties which will be reflected in RoomSelectionView
+        chatViewModel.serverHost = host
+        chatViewModel.serverPort = String(port)
+        chatViewModel.roomId = roomId
+        chatViewModel.role = "guest"
+        
+        chatViewModel.updateServerAddress(address: host, port: String(port))
+        chatViewModel.joinRoom()
     }
 }
 
 struct RoomSelectionView: View {
     @EnvironmentObject var chatViewModel: ChatViewModel
     @Binding var isRoomSelected: Bool
-    @State private var inputRoomId: String = ""
     @State private var errorMessage: String?
     @State private var agreeToTerms = true
-    @State private var serverAddress: String = "unspoken.luy.li"
-    @State private var serverPort: String = "8765"
     @State private var isJoining = false
     @State private var isCreating = false
     
@@ -60,7 +83,7 @@ struct RoomSelectionView: View {
                                 HStack {
                                     Image(systemName: "server.rack")
                                         .foregroundColor(.white)
-                                    TextField("Address", text: $serverAddress)
+                                    TextField("Address", text: $chatViewModel.serverHost)
                                         .textFieldStyle(RoundedBorderTextFieldStyle())
                                 }
                             }
@@ -72,7 +95,7 @@ struct RoomSelectionView: View {
                                 HStack {
                                     Image(systemName: "network")
                                         .foregroundColor(.white)
-                                    TextField("Port", text: $serverPort)
+                                    TextField("Port", text: $chatViewModel.serverPort)
                                         .textFieldStyle(RoundedBorderTextFieldStyle())
                                         .keyboardType(.numberPad)
                                 }
@@ -84,7 +107,7 @@ struct RoomSelectionView: View {
                         .cornerRadius(15)
                         
                         HStack {
-                            TextField("Room ID", text: $inputRoomId)
+                            TextField("Room ID", text: $chatViewModel.roomId)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .frame(width: min(120, geometry.size.width * 0.3))
                                 .keyboardType(.numberPad)
@@ -94,7 +117,7 @@ struct RoomSelectionView: View {
                                     withAnimation {
                                         isJoining = true
                                     }
-                                    joinRoom(roomId: inputRoomId)
+                                    joinRoom(roomId: chatViewModel.roomId)
                                 } else {
                                     errorMessage = "Please agree to the terms before proceeding."
                                 }
@@ -182,7 +205,7 @@ struct RoomSelectionView: View {
     }
     
     private var canJoin: Bool {
-        return agreeToTerms && inputRoomId.count >= 4 && inputRoomId.allSatisfy { $0.isNumber }
+        return agreeToTerms && chatViewModel.roomId.count >= 4 && chatViewModel.roomId.allSatisfy { $0.isNumber }
     }
     
     private var canCreate: Bool {
@@ -191,8 +214,8 @@ struct RoomSelectionView: View {
     
     private func createRoom() {
         chatViewModel.role = "host"
-        chatViewModel.createRoom() // 移到这里
-        chatViewModel.updateServerAddress(address: serverAddress, port: serverPort)
+        chatViewModel.updateServerAddress(address: chatViewModel.serverHost, port: chatViewModel.serverPort)
+        chatViewModel.createRoom()
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             withAnimation {
@@ -209,8 +232,8 @@ struct RoomSelectionView: View {
         
         chatViewModel.role = "guest"
         chatViewModel.roomId = roomId
-        chatViewModel.joinRoom() // 移到这里
-        chatViewModel.updateServerAddress(address: serverAddress, port: serverPort)
+        chatViewModel.updateServerAddress(address: chatViewModel.serverHost, port: chatViewModel.serverPort)
+        chatViewModel.joinRoom()
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             withAnimation {

@@ -15,6 +15,8 @@ class ChatViewModel: ObservableObject {
     @Published var isChatOpen: Bool = false
     @Published var roomId: String = ""
     @Published var serverAddress: String = "wss://unspoken.luy.li:8765"
+    @Published var serverHost: String = "unspoken.luy.li"
+    @Published var serverPort: String = "8765"
     @Published var role: String = ""
     
     private var socket: WebSocket?
@@ -31,6 +33,7 @@ class ChatViewModel: ObservableObject {
         //self.userId =
         generateKeyPair()
         print("my userId:\(self.userId), Key pair generated.")
+        self.serverAddress = "wss://\(serverHost):\(serverPort)"
     }
     
     private func setupWebSocket() {
@@ -208,6 +211,8 @@ class ChatViewModel: ObservableObject {
     
     func updateServerAddress(address: String, port: String) {
         print("Server set to \(address):\(port)")
+        self.serverHost = address
+        self.serverPort = port
         self.serverAddress = "wss://\(address):\(port)"
         setupWebSocket()
     }
