@@ -353,6 +353,7 @@ struct ContentView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var messageText: String = ""
     @State private var showBlockedWordAlert: Bool = false
+    @State private var showCopySuccessAlert: Bool = false
     @FocusState private var isTextFieldFocused: Bool
     
     var canSendMessage: Bool {
@@ -389,6 +390,11 @@ struct ContentView: View {
         } message: {
             Text("Message contains blocked words. Please modify and try again.")
         }
+        .alert("Link Copied", isPresented: $showCopySuccessAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Room invitation link has been copied to clipboard.")
+        }
     }
     
     var chatHeader: some View {
@@ -397,6 +403,17 @@ struct ContentView: View {
                 .font(.headline)
                 .foregroundColor(.white)
             Spacer()
+            if viewModel.role == "host" {
+                Button(action: {
+                    let url = "unspoken://\(viewModel.serverHost):\(viewModel.serverPort)/\(viewModel.roomId)"
+                    UIPasteboard.general.string = url
+                    showCopySuccessAlert = true
+                }) {
+                    Image(systemName: "link")
+                        .foregroundColor(.white)
+                }
+            }
+            Spacer().frame(width: 20)
             Button(action: {
                 viewModel.leaveRoom()
             }) {
