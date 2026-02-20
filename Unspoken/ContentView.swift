@@ -18,27 +18,159 @@ class ChatViewModel: ObservableObject {
     @Published var serverHost: String = "unspoken.luy.li"
     @Published var serverPort: String = "8765"
     @Published var role: String = ""
-    
+    @Published var isPinned: Bool = false
+    @Published var peerIsOnline: Bool = false
+    @Published var pinRequestPending: Bool = false
+    @Published var pinRequestReceived: Bool = false
+
     private var socket: WebSocket?
     private let userId: String = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
-    
+
     private var privateKey: SecKey?
     private var publicKey: SecKey?
     var peerPublicKey: SecKey?
     private var peerUserId: String?
-    
+
     private var pendingAction: (() -> Void)?
-    
+
+    // MARK: - UserDefaults keys for pin persistence
+    private let kPinnedRoomId = "pinnedRoomId"
+    private let kPinnedRole = "pinnedRole"
+    private let kPinnedServerHost = "pinnedServerHost"
+    private let kPinnedServerPort = "pinnedServerPort"
+    private let kPinnedPeerPublicKey = "pinnedPeerPublicKey"
+    private let kPinnedPeerUserId = "pinnedPeerUserId"
+    private let kSavedPrivateKey = "savedPrivateKey"
+    private let kSavedPublicKey = "savedPublicKey"
+
     init() {
-        //self.userId =
-        generateKeyPair()
-        print("my userId:\(self.userId), Key pair generated.")
+        if loadPinnedRoom() {
+            print("my userId:\(self.userId), Restored pinned room \(self.roomId) with saved keys.")
+        } else {
+            generateKeyPair()
+            print("my userId:\(self.userId), Key pair generated.")
+        }
         self.serverAddress = "wss://\(serverHost):\(serverPort)"
     }
-    
+
+    // MARK: - Key Persistence
+
+    private func saveKeyPair() {
+        guard let privateKey = privateKey, let publicKey = publicKey else { return }
+        var error: Unmanaged<CFError>?
+        if let privData = SecKeyCopyExternalRepresentation(privateKey, &error) as Data? {
+            UserDefaults.standard.set(privData, forKey: kSavedPrivateKey)
+        }
+        if let pubData = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? {
+            UserDefaults.standard.set(pubData, forKey: kSavedPublicKey)
+        }
+    }
+
+    private func loadKeyPair() -> Bool {
+        guard let privData = UserDefaults.standard.data(forKey: kSavedPrivateKey),
+              let pubData = UserDefaults.standard.data(forKey: kSavedPublicKey) else { return false }
+
+        let privAttrs: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
+            kSecAttrKeySizeInBits as String: 2048
+        ]
+        let pubAttrs: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPublic,
+            kSecAttrKeySizeInBits as String: 2048
+        ]
+
+        var error: Unmanaged<CFError>?
+        guard let privKey = SecKeyCreateWithData(privData as CFData, privAttrs as CFDictionary, &error) else {
+            print("Failed to restore private key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown")")
+            return false
+        }
+        guard let pubKey = SecKeyCreateWithData(pubData as CFData, pubAttrs as CFDictionary, &error) else {
+            print("Failed to restore public key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown")")
+            return false
+        }
+
+        self.privateKey = privKey
+        self.publicKey = pubKey
+        return true
+    }
+
+    func savePinnedRoom() {
+        let defaults = UserDefaults.standard
+        defaults.set(roomId, forKey: kPinnedRoomId)
+        defaults.set(role, forKey: kPinnedRole)
+        defaults.set(serverHost, forKey: kPinnedServerHost)
+        defaults.set(serverPort, forKey: kPinnedServerPort)
+        defaults.set(peerUserId, forKey: kPinnedPeerUserId)
+        // Save peer public key as Data
+        if let peerPubKey = peerPublicKey {
+            var error: Unmanaged<CFError>?
+            if let peerData = SecKeyCopyExternalRepresentation(peerPubKey, &error) as Data? {
+                defaults.set(peerData, forKey: kPinnedPeerPublicKey)
+            }
+        }
+        saveKeyPair()
+    }
+
+    func loadPinnedRoom() -> Bool {
+        let defaults = UserDefaults.standard
+        guard let savedRoomId = defaults.string(forKey: kPinnedRoomId),
+              let savedRole = defaults.string(forKey: kPinnedRole),
+              let savedHost = defaults.string(forKey: kPinnedServerHost),
+              let savedPort = defaults.string(forKey: kPinnedServerPort),
+              !savedRoomId.isEmpty else { return false }
+
+        guard loadKeyPair() else { return false }
+
+        self.roomId = savedRoomId
+        self.role = savedRole
+        self.serverHost = savedHost
+        self.serverPort = savedPort
+        self.isPinned = true
+
+        if let peerUid = defaults.string(forKey: kPinnedPeerUserId) {
+            self.peerUserId = peerUid
+        }
+        if let peerPubData = defaults.data(forKey: kPinnedPeerPublicKey) {
+            var error: Unmanaged<CFError>?
+            let attrs: [String: Any] = [
+                kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+                kSecAttrKeyClass as String: kSecAttrKeyClassPublic
+            ]
+            if let peerKey = SecKeyCreateWithData(peerPubData as CFData, attrs as CFDictionary, &error) {
+                self.peerPublicKey = peerKey
+            }
+        }
+        return true
+    }
+
+    func clearPinnedRoom() {
+        let defaults = UserDefaults.standard
+        for key in [kPinnedRoomId, kPinnedRole, kPinnedServerHost, kPinnedServerPort,
+                    kPinnedPeerPublicKey, kPinnedPeerUserId, kSavedPrivateKey, kSavedPublicKey] {
+            defaults.removeObject(forKey: key)
+        }
+        isPinned = false
+        pinRequestPending = false
+        pinRequestReceived = false
+        peerIsOnline = false
+    }
+
+    // MARK: - Public Key Helper
+
+    func getPublicKeyBase64() -> String? {
+        guard let publicKey = publicKey else { return nil }
+        var error: Unmanaged<CFError>?
+        guard let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else { return nil }
+        return publicKeyData.base64EncodedString()
+    }
+
+    // MARK: - WebSocket Setup
+
     private func setupWebSocket() {
         socket?.disconnect()
-        
+
         let url = URL(string: serverAddress)!
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
@@ -46,81 +178,134 @@ class ChatViewModel: ObservableObject {
         socket?.delegate = self
         socket?.connect()
     }
-    
+
     func sendLogin() {
         guard let publicKey = publicKey else { return }
-        
+
         var error: Unmanaged<CFError>?
         guard let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else {
             print("Failed to get public key data: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
             return
         }
-        
+
         let publicKeyBase64 = publicKeyData.base64EncodedString()
         let message = ["action": "login", "user_id": userId, "public_key": publicKeyBase64]
         sendJSON(message)
     }
-    
+
     func createRoom() {
         pendingAction = { [weak self] in
             self?.sendLogin()
             self?.sendJSON(["action": "create_room", "user_id": self?.userId as Any])
         }
     }
-    
+
     func joinRoom() {
         pendingAction = { [weak self] in
             self?.sendLogin()
-            if let roomId = self?.roomId {
-                self?.sendJSON(["action": "join_room", "room_id": roomId, "user_id": self?.userId as Any])
+            var msg: [String: Any] = [
+                "action": "join_room",
+                "room_id": self?.roomId as Any,
+                "user_id": self?.userId as Any
+            ]
+            // Include public key for pinned room rejoin
+            if let pubKey = self?.getPublicKeyBase64() {
+                msg["public_key"] = pubKey
             }
+            self?.sendJSON(msg)
         }
     }
-    
+
     func leaveRoom() {
-        let message = ["action": "leave_room", "room_id": roomId, "role": role]
-        sendJSON(message)
-        isChatOpen = false
-        roomId = ""
-        role = ""
-        messages = [] // 添加这行来清空消息
+        if isPinned {
+            // Pinned: send leave but keep local pin state
+            let message: [String: Any] = ["action": "leave_room", "room_id": roomId, "role": role, "user_id": userId]
+            sendJSON(message)
+            isChatOpen = false
+            peerIsOnline = false
+            messages = []
+            typingContent = ""
+            pinRequestPending = false
+            pinRequestReceived = false
+        } else {
+            let message: [String: Any] = ["action": "leave_room", "room_id": roomId, "role": role, "user_id": userId]
+            sendJSON(message)
+            isChatOpen = false
+            roomId = ""
+            role = ""
+            messages = []
+            typingContent = ""
+            peerPublicKey = nil
+            peerUserId = nil
+            pinRequestPending = false
+            pinRequestReceived = false
+        }
     }
-    
+
+    // MARK: - Pin Actions
+
+    func requestPin() {
+        let message: [String: Any] = ["action": "request_pin", "room_id": roomId, "role": role]
+        sendJSON(message)
+        pinRequestPending = true
+    }
+
+    func acceptPin() {
+        let message: [String: Any] = ["action": "accept_pin", "room_id": roomId, "role": role]
+        sendJSON(message)
+        pinRequestReceived = false
+    }
+
+    func rejectPin() {
+        let message: [String: Any] = ["action": "reject_pin", "room_id": roomId, "role": role]
+        sendJSON(message)
+        pinRequestReceived = false
+    }
+
+    func unpinRoom() {
+        let message: [String: Any] = ["action": "unpin_room", "room_id": roomId, "role": role]
+        sendJSON(message)
+        clearPinnedRoom()
+        leaveRoom()
+    }
+
+    // MARK: - Crypto
+
     private func generateKeyPair() {
         print("start to generateKeyPair...")
         let attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
             kSecAttrKeySizeInBits as String: 2048
         ]
-        
+
         var error: Unmanaged<CFError>?
         guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error),
               let publicKey = SecKeyCopyPublicKey(privateKey) else {
             print("Failed to generate key pair: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
             return
         }
-        
+
         self.privateKey = privateKey
         self.publicKey = publicKey
     }
-    
+
     private func encryptMessage(_ message: String) -> (String, String)? {
         guard let peerPublicKey = peerPublicKey else {
             print("Peer public key not available")
             return nil
         }
-        
+
         // 生成随机AES密钥
         let aesKey = SymmetricKey(size: .bits256)
         let aesKeyData = aesKey.withUnsafeBytes { Data($0) }
-        
+
         // 使用AES加密消息
         guard let messageData = message.data(using: .utf8) else {
             print("Failed to convert message to data")
             return nil
         }
         let encryptedMessage = try? AES.GCM.seal(messageData, using: aesKey).combined
-        
+
         // 使用RSA加密AES密钥
         var error: Unmanaged<CFError>?
         guard let encryptedAESKey = SecKeyCreateEncryptedData(peerPublicKey,
@@ -130,22 +315,22 @@ class ChatViewModel: ObservableObject {
             print("AES key encryption failed: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
             return nil
         }
-        
+
         return (encryptedAESKey.base64EncodedString(), encryptedMessage?.base64EncodedString() ?? "")
     }
-    
+
     private func decryptMessage(encryptedAESKey: String, encryptedMessage: String) -> String? {
         guard let privateKey = privateKey else {
             print("Private key not available")
             return nil
         }
-        
+
         guard let encryptedAESKeyData = Data(base64Encoded: encryptedAESKey),
               let encryptedMessageData = Data(base64Encoded: encryptedMessage) else {
             print("Failed to decode base64 encrypted data")
             return nil
         }
-        
+
         // 解密AES密钥
         var error: Unmanaged<CFError>?
         guard let decryptedAESKeyData = SecKeyCreateDecryptedData(privateKey,
@@ -155,22 +340,25 @@ class ChatViewModel: ObservableObject {
             print("AES key decryption failed: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
             return nil
         }
-        
+
         let aesKey = SymmetricKey(data: decryptedAESKeyData)
-        
+
         // 使用AES密钥解密消息
         guard let sealedBox = try? AES.GCM.SealedBox(combined: encryptedMessageData),
               let decryptedData = try? AES.GCM.open(sealedBox, using: aesKey) else {
             print("Message decryption failed")
             return nil
         }
-        
+
         return String(data: decryptedData, encoding: .utf8)
     }
-    
+
     func sendTyping(content: String) {
+        // Skip typing in pinned rooms when peer is offline
+        if isPinned && !peerIsOnline { return }
+
         guard let (encryptedAESKey, encryptedContent) = encryptMessage(content) else { return }
-        
+
         let message = [
             "action": "typing",
             "room_id": roomId,
@@ -178,13 +366,13 @@ class ChatViewModel: ObservableObject {
             "encrypted_aes_key": encryptedAESKey,
             "encrypted_content": encryptedContent
         ]
-        
+
         sendJSON(message)
     }
-    
+
     func sendMessage(content: String) {
         guard let (encryptedAESKey, encryptedContent) = encryptMessage(content) else { return }
-        
+
         let message = [
             "action": "send_message",
             "room_id": roomId,
@@ -192,11 +380,11 @@ class ChatViewModel: ObservableObject {
             "encrypted_aes_key": encryptedAESKey,
             "encrypted_content": encryptedContent
         ]
-        
+
         sendJSON(message)
         messages.append(Message(content: content, isFromMe: true, isTyping: false))
     }
-    
+
     private func sendJSON(_ dictionary: [String: Any]) {
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: dictionary, options: [])
@@ -208,7 +396,7 @@ class ChatViewModel: ObservableObject {
             print("Error encoding JSON: \(error)")
         }
     }
-    
+
     func updateServerAddress(address: String, port: String) {
         print("Server set to \(address):\(port)")
         self.serverHost = address
@@ -216,7 +404,7 @@ class ChatViewModel: ObservableObject {
         self.serverAddress = "wss://\(address):\(port)"
         setupWebSocket()
     }
-    
+
     func reportUser() {
         guard let peerUserId = peerUserId else { return }
         let message = [
@@ -224,8 +412,11 @@ class ChatViewModel: ObservableObject {
             "reported_user_id": peerUserId
         ]
         sendJSON(message)
-        // 立即离开房间
-        leaveRoom()
+        if isPinned {
+            unpinRoom()
+        } else {
+            leaveRoom()
+        }
     }
 }
 
@@ -260,13 +451,13 @@ extension ChatViewModel: WebSocketDelegate {
             break
         }
     }
-    
+
     private func handleMessage(_ message: String) {
         guard let data = message.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else { return }
-        
+
         let action = json["action"] as? String ?? ""
-        
+
         DispatchQueue.main.async {
             switch action {
             case "room_created", "room_joined":
@@ -275,6 +466,13 @@ extension ChatViewModel: WebSocketDelegate {
                     self.roomId = roomId
                     self.role = role
                     self.isChatOpen = true
+                }
+                // Read pinned/peer_status fields
+                if let pinned = json["pinned"] as? Bool {
+                    self.isPinned = pinned
+                }
+                if let peerStatus = json["peer_status"] as? String {
+                    self.peerIsOnline = (peerStatus == "online")
                 }
                 if let peerUserId = json["peer_user_id"] as? String,
                    let publicKeyBase64 = json["peer_public_key"] as? String,
@@ -287,7 +485,11 @@ extension ChatViewModel: WebSocketDelegate {
                         self.peerPublicKey = peerPublicKey
                         self.peerUserId = peerUserId
                         print("Received and set peer public key")
-                        self.messages.append(Message(content: "Encrypted channel established, enjoy!", isFromMe: false, isTyping: false, isSystem: true))
+                        if self.isPinned {
+                            self.messages.append(Message(content: "Rejoined pinned room. Encrypted channel restored.", isFromMe: false, isTyping: false, isSystem: true))
+                        } else {
+                            self.messages.append(Message(content: "Encrypted channel established, enjoy!", isFromMe: false, isTyping: false, isSystem: true))
+                        }
                     } else {
                         print("Failed to create peer public key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
                     }
@@ -331,10 +533,75 @@ extension ChatViewModel: WebSocketDelegate {
                    let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
                     self.messages.append(Message(content: decryptedContent, isFromMe: false, isTyping: false))
                 }
+
+            // MARK: - Pin protocol handlers
+            case "pin_requested":
+                self.pinRequestReceived = true
+            case "pin_accepted":
+                self.isPinned = true
+                self.pinRequestPending = false
+                // Update peer key/id if provided
+                if let peerUserId = json["peer_user_id"] as? String {
+                    self.peerUserId = peerUserId
+                }
+                if let publicKeyBase64 = json["peer_public_key"] as? String,
+                   let publicKeyData = Data(base64Encoded: publicKeyBase64) {
+                    var error: Unmanaged<CFError>?
+                    if let peerKey = SecKeyCreateWithData(publicKeyData as CFData,
+                                                          [kSecAttrKeyType: kSecAttrKeyTypeRSA,
+                                                           kSecAttrKeyClass: kSecAttrKeyClassPublic] as CFDictionary,
+                                                          &error) {
+                        self.peerPublicKey = peerKey
+                    }
+                }
+                self.savePinnedRoom()
+                self.messages.append(Message(content: "Room pinned! This room will persist across sessions.", isFromMe: false, isTyping: false, isSystem: true))
+            case "pin_rejected":
+                self.pinRequestPending = false
+                self.messages.append(Message(content: "Pin request was declined.", isFromMe: false, isTyping: false, isSystem: true))
+            case "room_unpinned":
+                self.clearPinnedRoom()
+                self.messages.append(Message(content: "Room has been unpinned by peer.", isFromMe: false, isTyping: false, isSystem: true))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    self.isChatOpen = false
+                    self.roomId = ""
+                    self.role = ""
+                    self.messages = []
+                    self.peerPublicKey = nil
+                    self.peerUserId = nil
+                }
+            case "peer_status":
+                if let status = json["status"] as? String {
+                    self.peerIsOnline = (status == "online")
+                    let statusText = status == "online" ? "Peer is now online." : "Peer went offline."
+                    self.messages.append(Message(content: statusText, isFromMe: false, isTyping: false, isSystem: true))
+                    if status == "offline" {
+                        self.typingContent = ""
+                    }
+                }
+            case "pending_messages":
+                if let msgs = json["messages"] as? [[String: Any]] {
+                    for msg in msgs {
+                        if let encryptedAESKey = msg["encrypted_aes_key"] as? String,
+                           let encryptedContent = msg["encrypted_content"] as? String,
+                           let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
+                            self.messages.append(Message(content: decryptedContent, isFromMe: false, isTyping: false))
+                        }
+                    }
+                }
+
             case "error":
                 if let errorMessage = json["message"] as? String {
                     print("Error: \(errorMessage)")
-                    // You might want to show this error to the user
+                    // If pinned room not found, peer must have unpinned while we were offline
+                    if self.isPinned && errorMessage.lowercased().contains("not found") {
+                        self.clearPinnedRoom()
+                        self.isChatOpen = false
+                        self.roomId = ""
+                        self.role = ""
+                        self.peerPublicKey = nil
+                        self.peerUserId = nil
+                    }
                 }
             case "blocked":
                 if let errorMessage = json["message"] as? String {
@@ -355,22 +622,22 @@ struct ContentView: View {
     @State private var showBlockedWordAlert: Bool = false
     @State private var showCopySuccessAlert: Bool = false
     @FocusState private var isTextFieldFocused: Bool
-    
+
     var canSendMessage: Bool {
         return viewModel.peerPublicKey != nil
     }
-    
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 LinearGradient(gradient: Gradient(colors: [Color.blue.opacity(0.4), Color.purple.opacity(0.4)]), startPoint: .topLeading, endPoint: .bottomTrailing)
                     .edgesIgnoringSafeArea(.all)
-                
+
                 VStack(spacing: 0) {
                     chatHeader
-                    
+
                     chatMessages
-                    
+
                     inputArea
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -395,15 +662,53 @@ struct ContentView: View {
         } message: {
             Text("Room invitation link has been copied to clipboard.")
         }
+        .alert("Pin Request", isPresented: $viewModel.pinRequestReceived) {
+            Button("Accept") {
+                viewModel.acceptPin()
+            }
+            Button("Decline", role: .cancel) {
+                viewModel.rejectPin()
+            }
+        } message: {
+            Text("Your peer wants to pin this room. Pinned rooms persist across sessions and support offline messaging. Accept?")
+        }
     }
-    
+
     var chatHeader: some View {
         HStack {
+            // Pin indicator
+            if viewModel.isPinned {
+                Image(systemName: "pin.fill")
+                    .foregroundColor(.yellow)
+                    .font(.caption)
+            }
+
             Text("Room: \(viewModel.roomId)")
                 .font(.headline)
                 .foregroundColor(.white)
+
+            // Online status indicator for pinned rooms
+            if viewModel.isPinned {
+                Circle()
+                    .fill(viewModel.peerIsOnline ? Color.green : Color.gray)
+                    .frame(width: 8, height: 8)
+            }
+
             Spacer()
-            if viewModel.role == "host" {
+
+            // Pin button (only when not pinned and peer is present)
+            if !viewModel.isPinned && viewModel.peerPublicKey != nil {
+                Button(action: {
+                    viewModel.requestPin()
+                }) {
+                    Image(systemName: "pin")
+                        .foregroundColor(viewModel.pinRequestPending ? .gray : .white)
+                }
+                .disabled(viewModel.pinRequestPending)
+            }
+
+            // Copy link button (host only, non-pinned)
+            if viewModel.role == "host" && !viewModel.isPinned {
                 Button(action: {
                     let url = "unspoken://\(viewModel.serverHost):\(viewModel.serverPort)/\(viewModel.roomId)"
                     UIPasteboard.general.string = url
@@ -413,22 +718,49 @@ struct ContentView: View {
                         .foregroundColor(.white)
                 }
             }
-            Spacer().frame(width: 20)
-            Button(action: {
-                viewModel.leaveRoom()
-            }) {
-                Text("Leave")
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Color.red.opacity(0.8))
-                    .cornerRadius(8)
+
+            Spacer().frame(width: 12)
+
+            if viewModel.isPinned {
+                // Leave button (temporary, keeps pin)
+                Button(action: {
+                    viewModel.leaveRoom()
+                }) {
+                    Text("Leave")
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color.orange.opacity(0.8))
+                        .cornerRadius(8)
+                }
+                // Unpin button (permanent)
+                Button(action: {
+                    viewModel.unpinRoom()
+                }) {
+                    Text("Unpin")
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color.red.opacity(0.8))
+                        .cornerRadius(8)
+                }
+            } else {
+                Button(action: {
+                    viewModel.leaveRoom()
+                }) {
+                    Text("Leave")
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.red.opacity(0.8))
+                        .cornerRadius(8)
+                }
             }
         }
         .padding()
         .background(Color.black.opacity(0.2))
     }
-    
+
     var chatMessages: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -465,10 +797,10 @@ struct ContentView: View {
             }
         }
     }
-    
+
     var inputArea: some View {
         HStack(spacing: 10) {
-            TextField(canSendMessage ? "Type a message" : "Waiting for peer to join...", text: $messageText)
+            TextField(inputPlaceholder, text: $messageText)
                 .padding(.horizontal, 15)
                 .padding(.vertical, 10)
                 .background(Color.white.opacity(0.2))
@@ -489,7 +821,7 @@ struct ContentView: View {
                     }
                 }
                 .disabled(!canSendMessage)
-            
+
             Button(action: clearMessage) {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(.white)
@@ -499,7 +831,7 @@ struct ContentView: View {
                     .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
             }
             .disabled(messageText.isEmpty || !canSendMessage)
-            
+
             Button(action: sendMessage) {
                 Image(systemName: "paperplane.fill")
                     .foregroundColor(.white)
@@ -514,7 +846,17 @@ struct ContentView: View {
         .padding(.vertical, 10)
         .background(Color.black.opacity(0.1))
     }
-    
+
+    private var inputPlaceholder: String {
+        if !canSendMessage {
+            return "Waiting for peer to join..."
+        }
+        if viewModel.isPinned && !viewModel.peerIsOnline {
+            return "Message (peer offline, will be delivered later)"
+        }
+        return "Type a message"
+    }
+
     //iOS	 app上架审核需要有这个功能
     func canSend(content: String) -> Bool {
         let blockedWords = ["badword1", "badword2", "fuck", "shit", "ass", "asshole", "bastard", "bitch", "damn", "dick", "douche", "fag", "faggot", "hell", "piss", "slut", "whore", "cunt", "crap", "jerk", "balls", "prick", "cock", "wanker", "retard", "moron", "damn", "bloody", "bollocks" ]
@@ -525,7 +867,7 @@ struct ContentView: View {
         }
         return true
     }
-    
+
     private func sendMessage() {
         guard canSend(content: messageText) else {
             showBlockedWordAlert = true
@@ -537,7 +879,7 @@ struct ContentView: View {
             isTextFieldFocused = true
         }
     }
-    
+
     private func clearMessage() {
         messageText = ""
     }
@@ -546,7 +888,7 @@ struct ContentView: View {
 struct MessageView: View {
     let message: Message
     let onReport: () -> Void
-    
+
     var body: some View {
         Group {
             if message.isSystem {
@@ -596,7 +938,7 @@ struct Message: Identifiable {
     let isFromMe: Bool
     let isTyping: Bool
     let isSystem: Bool
-    
+
     init(content: String, isFromMe: Bool, isTyping: Bool, isSystem: Bool = false) {
         self.content = content
         self.isFromMe = isFromMe
