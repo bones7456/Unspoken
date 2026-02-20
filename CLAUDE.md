@@ -73,8 +73,17 @@ Pinning makes a room persistent — surviving server restarts, app restarts, and
 
 **Key behaviors:**
 - **Server:** Pinned rooms are saved to `data/pinned_rooms.json`. When a peer is offline, messages queue to `data/pending_messages.json` and deliver on rejoin. `cleanup_user` / `leave_room` only clear the user's slot (room survives). On startup, `restore_pinned_rooms()` rehydrates all state from disk.
-- **Client:** RSA key pair + room metadata (roomId, role, server, peer key/id) saved to UserDefaults. `ChatViewModel.init()` restores pinned state on launch. `RoomSelectionView` shows a "Rejoin Pinned Room" card when pinned (hides create/join UI).
+- **Client:** RSA key pair + room metadata (roomId, role, server, peer key/id) saved to UserDefaults. Pinned room data is NOT loaded at launch — it requires Face ID / Touch ID authentication first (see below). `RoomSelectionView` shows a "Rejoin Pinned Room" card only after biometric unlock.
 - **UI:** Yellow pin icon + online indicator in chat header. Orange "Leave" (temporary) + red "Unpin" (permanent) buttons. Pin request shown as an alert with Accept/Decline. Input placeholder changes when peer is offline.
+
+### Face ID / Biometric unlock
+Pinned room data is protected by biometric authentication (`LocalAuthentication` framework):
+- `ChatViewModel.init()` always generates fresh keys and does NOT load pinned room data
+- `hasSavedPinnedRoom` does a lightweight UserDefaults check (reads only `pinnedRoomId` key) to determine if a Face ID button should appear
+- `RoomSelectionView` shows a small Face ID icon (`faceid` SF Symbol) when `hasSavedPinnedRoom && !isPinned`
+- Tapping it calls `unlockPinnedRoom()` → `LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics)` → on success, `loadPinnedRoom()` restores keys and room state, sets `isPinned = true`, and the rejoin UI appears
+- Fallback: if biometrics are unavailable (e.g. simulator, no enrolled Face ID), loads directly without auth
+- `NSFaceIDUsageDescription` is set in `Info.plist` for the system permission dialog
 
 ## Conventions
 

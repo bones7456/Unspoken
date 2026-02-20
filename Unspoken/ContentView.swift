@@ -8,6 +8,7 @@
 import SwiftUI
 import Starscream
 import CryptoKit
+import LocalAuthentication
 
 class ChatViewModel: ObservableObject {
     @Published var messages: [Message] = []
@@ -44,13 +45,37 @@ class ChatViewModel: ObservableObject {
     private let kSavedPublicKey = "savedPublicKey"
 
     init() {
-        if loadPinnedRoom() {
-            print("my userId:\(self.userId), Restored pinned room \(self.roomId) with saved keys.")
-        } else {
-            generateKeyPair()
-            print("my userId:\(self.userId), Key pair generated.")
-        }
+        generateKeyPair()
+        print("my userId:\(self.userId), Key pair generated.")
         self.serverAddress = "wss://\(serverHost):\(serverPort)"
+    }
+
+    /// Whether there is a saved pinned room in UserDefaults (checked without loading keys)
+    var hasSavedPinnedRoom: Bool {
+        guard let saved = UserDefaults.standard.string(forKey: kPinnedRoomId) else { return false }
+        return !saved.isEmpty
+    }
+
+    /// Authenticate with Face ID / Touch ID, then load pinned room data
+    func unlockPinnedRoom() {
+        let context = LAContext()
+        var error: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            print("Biometrics unavailable: \(error?.localizedDescription ?? "Unknown")")
+            _ = loadPinnedRoom()
+            return
+        }
+        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "Unlock your pinned room") { success, authError in
+            DispatchQueue.main.async {
+                if success {
+                    if self.loadPinnedRoom() {
+                        print("Pinned room unlocked via biometrics: \(self.roomId)")
+                    }
+                } else {
+                    print("Biometric auth failed: \(authError?.localizedDescription ?? "Unknown")")
+                }
+            }
+        }
     }
 
     // MARK: - Key Persistence

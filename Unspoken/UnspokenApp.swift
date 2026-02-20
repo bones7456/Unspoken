@@ -75,7 +75,18 @@ struct RoomSelectionView: View {
                             .foregroundColor(.white)
                             .shadow(color: .black.opacity(0.2), radius: 2, x: 2, y: 2)
 
-                        // Pinned room rejoin section
+                        // Face ID unlock button (shown when there's a saved pinned room but not yet unlocked)
+                        if chatViewModel.hasSavedPinnedRoom && !chatViewModel.isPinned {
+                            Button(action: {
+                                chatViewModel.unlockPinnedRoom()
+                            }) {
+                                Image(systemName: "faceid")
+                                    .font(.system(size: 24))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                        }
+
+                        // Pinned room rejoin section (shown after Face ID unlock)
                         if chatViewModel.isPinned {
                             VStack(spacing: 15) {
                                 HStack {
