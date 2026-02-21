@@ -45,8 +45,12 @@ class ChatViewModel: ObservableObject {
     private let kSavedPublicKey = "savedPublicKey"
 
     init() {
-        generateKeyPair()
-        print("my userId:\(self.userId), Key pair generated.")
+        if loadKeyPair() {
+            print("my userId:\(self.userId), Restored saved key pair.")
+        } else {
+            generateKeyPair()
+            print("my userId:\(self.userId), Key pair generated.")
+        }
         self.serverAddress = "wss://\(serverHost):\(serverPort)"
     }
 
