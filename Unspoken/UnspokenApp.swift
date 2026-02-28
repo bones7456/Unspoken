@@ -61,6 +61,7 @@ struct RoomSelectionView: View {
     @State private var agreeToTerms = true
     @State private var isJoining = false
     @State private var isCreating = false
+    @State private var showForgetConfirmation = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -108,11 +109,19 @@ struct RoomSelectionView: View {
                                 }
 
                                 Button(action: {
-                                    chatViewModel.clearPinnedRoom()
+                                    showForgetConfirmation = true
                                 }) {
                                     Text("Forget Pinned Room")
                                         .font(.caption)
                                         .foregroundColor(.white.opacity(0.7))
+                                }
+                                .alert("Forget Pinned Room?", isPresented: $showForgetConfirmation) {
+                                    Button("Forget", role: .destructive) {
+                                        chatViewModel.clearPinnedRoom()
+                                    }
+                                    Button("Cancel", role: .cancel) {}
+                                } message: {
+                                    Text("This will remove all saved room data from this device. You won't be able to rejoin the pinned room.")
                                 }
                             }
                             .padding()
