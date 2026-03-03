@@ -247,10 +247,11 @@ class ChatViewModel: ObservableObject {
 
     func leaveRoom() {
         if isPinned {
-            // Pinned: send leave but keep local pin state
+            // Pinned: send leave, hide rejoin card until Face ID unlock
             let message: [String: Any] = ["action": "leave_room", "room_id": roomId, "role": role, "user_id": userId]
             sendJSON(message)
             isChatOpen = false
+            isPinned = false
             peerIsOnline = false
             messages = []
             typingContent = ""
