@@ -35,7 +35,13 @@ class ChatViewModel: ObservableObject {
     private var hapticLoopActive = false
     private var peerBPM: Int?
     private var hkObserverQuery: HKObserverQuery?
-    private let userId: String = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+    private let userId: String = {
+        let key = "stableUserId"
+        if let saved = UserDefaults.standard.string(forKey: key) { return saved }
+        let new = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+        UserDefaults.standard.set(new, forKey: key)
+        return new
+    }()
 
     private var privateKey: SecKey?
     private var publicKey: SecKey?
