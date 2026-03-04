@@ -9,6 +9,9 @@ import SwiftUI
 import Starscream
 import CryptoKit
 import LocalAuthentication
+import HealthKit
+import UIKit
+import WatchConnectivity
 
 class ChatViewModel: ObservableObject {
     @Published var messages: [Message] = []
@@ -23,8 +26,15 @@ class ChatViewModel: ObservableObject {
     @Published var peerIsOnline: Bool = false
     @Published var pinRequestPending: Bool = false
     @Published var pinRequestReceived: Bool = false
+    @Published var isHeartRateMode: Bool = false
+    @Published var currentBPM: Int? = nil
 
     private var socket: WebSocket?
+    private var healthStore: HKHealthStore?
+    private var heartRateTimer: Timer?
+    private var hapticLoopActive = false
+    private var peerBPM: Int?
+    private var hkObserverQuery: HKObserverQuery?
     private let userId: String = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
 
     private var privateKey: SecKey?
@@ -33,6 +43,7 @@ class ChatViewModel: ObservableObject {
     private var peerUserId: String?
 
     private var pendingAction: (() -> Void)?
+    private var wcAdapter: WCAdapter?
 
     // MARK: - UserDefaults keys for pin persistence
     private let kPinnedRoomId = "pinnedRoomId"
@@ -52,6 +63,17 @@ class ChatViewModel: ObservableObject {
             print("my userId:\(self.userId), Key pair generated.")
         }
         self.serverAddress = "wss://\(serverHost):\(serverPort)"
+        setupWatchConnectivity()
+    }
+
+    private func setupWatchConnectivity() {
+        guard WCSession.isSupported() else { return }
+        let adapter = WCAdapter { [weak self] bpm in
+            DispatchQueue.main.async { self?.currentBPM = bpm }
+        }
+        self.wcAdapter = adapter
+        WCSession.default.delegate = adapter
+        WCSession.default.activate()
     }
 
     /// Whether there is a saved pinned room in UserDefaults (checked without loading keys)
@@ -246,6 +268,7 @@ class ChatViewModel: ObservableObject {
     }
 
     func leaveRoom() {
+        stopHeartRateMode()
         if isPinned {
             // Pinned: send leave, hide rejoin card until Face ID unlock
             let message: [String: Any] = ["action": "leave_room", "room_id": roomId, "role": role, "user_id": userId]
@@ -448,6 +471,111 @@ class ChatViewModel: ObservableObject {
             leaveRoom()
         }
     }
+
+    // MARK: - Heart Rate Mode
+
+    var canUseHeartRateMode: Bool {
+        peerPublicKey != nil && (!isPinned || peerIsOnline)
+    }
+
+    func startHeartRateMode() {
+        guard HKHealthStore.isHealthDataAvailable() else { return }
+        let store = HKHealthStore()
+        healthStore = store
+        guard let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
+
+        store.requestAuthorization(toShare: nil, read: [heartRateType]) { [weak self] success, _ in
+            guard let self = self, success else { return }
+
+            let query = HKObserverQuery(sampleType: heartRateType, predicate: nil) { [weak self] _, completionHandler, error in
+                guard error == nil else { completionHandler(); return }
+                self?.fetchLatestHeartRate(store: store)
+                completionHandler()
+            }
+            self.hkObserverQuery = query
+            store.execute(query)
+            self.fetchLatestHeartRate(store: store)
+
+            DispatchQueue.main.async {
+                self.isHeartRateMode = true
+                if WCSession.isSupported() && WCSession.default.isReachable {
+                    WCSession.default.sendMessage(["action": "start_heart_rate"], replyHandler: nil, errorHandler: nil)
+                }
+                self.heartRateTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+                    guard let self = self, let bpm = self.currentBPM else { return }
+                    self.sendHeartRate(bpm: bpm)
+                }
+            }
+        }
+    }
+
+    func stopHeartRateMode() {
+        if WCSession.isSupported() && WCSession.default.isReachable {
+            WCSession.default.sendMessage(["action": "stop_heart_rate"], replyHandler: nil, errorHandler: nil)
+        }
+        heartRateTimer?.invalidate()
+        heartRateTimer = nil
+        hapticLoopActive = false
+        peerBPM = nil
+        if let query = hkObserverQuery {
+            healthStore?.stop(query)
+            hkObserverQuery = nil
+        }
+        isHeartRateMode = false
+        currentBPM = nil
+    }
+
+    private func fetchLatestHeartRate(store: HKHealthStore) {
+        guard let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+        let query = HKSampleQuery(sampleType: heartRateType, predicate: nil, limit: 1, sortDescriptors: [sort]) { [weak self] _, samples, _ in
+            guard let sample = samples?.first as? HKQuantitySample else { return }
+            let bpm = Int(sample.quantity.doubleValue(for: HKUnit(from: "count/min")))
+            DispatchQueue.main.async { self?.currentBPM = bpm }
+        }
+        store.execute(query)
+    }
+
+    func sendHeartRate(bpm: Int) {
+        guard canUseHeartRateMode,
+              let (encryptedAESKey, encryptedContent) = encryptMessage("\(bpm)") else { return }
+        let message: [String: Any] = [
+            "action": "heart_rate",
+            "room_id": roomId,
+            "role": role,
+            "encrypted_aes_key": encryptedAESKey,
+            "encrypted_content": encryptedContent
+        ]
+        sendJSON(message)
+    }
+
+    func handleReceivedHeartRate(bpm: Int) {
+        peerBPM = bpm
+        guard !hapticLoopActive else { return }
+        hapticLoopActive = true
+        let heavy = UIImpactFeedbackGenerator(style: .heavy)
+        let medium = UIImpactFeedbackGenerator(style: .medium)
+        heavy.prepare()
+        medium.prepare()
+        beatLoop(heavy: heavy, medium: medium)
+    }
+
+    private func beatLoop(heavy: UIImpactFeedbackGenerator, medium: UIImpactFeedbackGenerator) {
+        guard hapticLoopActive, let bpm = peerBPM else {
+            hapticLoopActive = false
+            return
+        }
+        let interval = 60.0 / Double(bpm)
+        let gap = 0.5 - 0.0021 * Double(bpm)
+        heavy.impactOccurred()
+        DispatchQueue.main.asyncAfter(deadline: .now() + gap) { [weak self] in
+            guard let self, self.hapticLoopActive else { return }
+            medium.impactOccurred()
+            DispatchQueue.main.asyncAfter(deadline: .now() + (interval - gap)) { [weak self] in
+                self?.beatLoop(heavy: heavy, medium: medium)
+            }
+        }
+    }
 }
 
 extension ChatViewModel: WebSocketDelegate {
@@ -557,6 +685,13 @@ extension ChatViewModel: WebSocketDelegate {
                    let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
                     self.typingContent = decryptedContent
                 }
+            case "heart_rate":
+                if let encryptedAESKey = json["encrypted_aes_key"] as? String,
+                   let encryptedContent = json["encrypted_content"] as? String,
+                   let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent),
+                   let bpm = Int(decryptedContent) {
+                    self.handleReceivedHeartRate(bpm: bpm)
+                }
             case "new_message":
                 if let encryptedAESKey = json["encrypted_aes_key"] as? String,
                    let encryptedContent = json["encrypted_content"] as? String,
@@ -607,6 +742,7 @@ extension ChatViewModel: WebSocketDelegate {
                     self.messages.append(Message(content: statusText, isFromMe: false, isTyping: false, isSystem: true))
                     if status == "offline" {
                         self.typingContent = ""
+                        if self.isHeartRateMode { self.stopHeartRateMode() }
                     }
                 }
             case "pending_messages":
@@ -651,6 +787,7 @@ struct ContentView: View {
     @State private var messageText: String = ""
     @State private var showBlockedWordAlert: Bool = false
     @State private var showCopySuccessAlert: Bool = false
+    @State private var heartPulse: Bool = false
     @FocusState private var isTextFieldFocused: Bool
 
     var canSendMessage: Bool {
@@ -747,6 +884,38 @@ struct ContentView: View {
                     Image(systemName: "link")
                         .foregroundColor(.white)
                 }
+            }
+
+            // Heart rate button (when peer is online and encryption ready)
+            if viewModel.canUseHeartRateMode || viewModel.isHeartRateMode {
+                Button(action: {
+                    if viewModel.isHeartRateMode {
+                        viewModel.stopHeartRateMode()
+                    } else {
+                        viewModel.startHeartRateMode()
+                    }
+                }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: viewModel.isHeartRateMode ? "heart.fill" : "heart")
+                            .foregroundColor(viewModel.isHeartRateMode ? .red : .white)
+                            .scaleEffect(heartPulse ? 1.2 : 1.0)
+                            .onChange(of: viewModel.isHeartRateMode) { active in
+                                if active {
+                                    withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) {
+                                        heartPulse = true
+                                    }
+                                } else {
+                                    withAnimation { heartPulse = false }
+                                }
+                            }
+                        if viewModel.isHeartRateMode, let bpm = viewModel.currentBPM {
+                            Text("\(bpm)")
+                                .font(.caption.bold())
+                                .foregroundColor(.red)
+                        }
+                    }
+                }
+                .disabled(!viewModel.canUseHeartRateMode)
             }
 
             Spacer().frame(width: 12)
@@ -959,6 +1128,21 @@ struct MessageView: View {
             }
         }
         .padding(.vertical, 1)
+    }
+}
+
+// MARK: - WCAdapter (NSObject required for WCSessionDelegate)
+private class WCAdapter: NSObject, WCSessionDelegate {
+    private let onBPM: (Int) -> Void
+    init(onBPM: @escaping (Int) -> Void) { self.onBPM = onBPM }
+
+    func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {}
+    func sessionDidBecomeInactive(_ session: WCSession) {}
+    func sessionDidDeactivate(_ session: WCSession) { WCSession.default.activate() }
+
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        guard let bpm = message["bpm"] as? Int else { return }
+        onBPM(bpm)
     }
 }
 

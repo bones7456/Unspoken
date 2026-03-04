@@ -369,6 +369,25 @@ async def handle_connection(websocket):
                         await connected_users[other_user_id].send(notification)
                         log_message("SENT", other_user_id, notification)
 
+            elif action == 'heart_rate':
+                room_id = data['room_id']
+                role = data['role']
+                encrypted_aes_key = data['encrypted_aes_key']
+                encrypted_content = data['encrypted_content']
+                if room_id in rooms:
+                    other_role = 'guest' if role == 'host' else 'host'
+                    other_user_id = rooms[room_id][other_role]
+                    if other_user_id and other_user_id in connected_users:
+                        notification = json.dumps({
+                            'action': 'heart_rate',
+                            'room_id': room_id,
+                            'role': role,
+                            'encrypted_aes_key': encrypted_aes_key,
+                            'encrypted_content': encrypted_content
+                        })
+                        await connected_users[other_user_id].send(notification)
+                        log_message("SENT", other_user_id, notification)
+
             elif action == 'send_message':
                 room_id = data['room_id']
                 role = data['role']
