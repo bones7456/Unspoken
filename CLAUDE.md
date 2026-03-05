@@ -85,6 +85,107 @@ Pinned room metadata is protected by biometric authentication (`LocalAuthenticat
 - Fallback: if biometrics are unavailable (e.g. simulator, no enrolled Face ID), loads directly without auth
 - `NSFaceIDUsageDescription` is set in `Info.plist` for the system permission dialog
 
+## Heart Rate Feature
+
+Requires Apple Watch (iPhone has no heart rate sensor; HealthKit is data aggregator only).
+
+### Architecture
+
+```
+Watch HKWorkoutSession → HKLiveWorkoutBuilder callback (~1-5s)
+    → WCSession.sendMessage(["bpm": X])
+    → iPhone WCAdapter.didReceiveMessage → currentBPM updated
+    → 3s Timer → sendHeartRate(bpm:) → encrypted WebSocket → peer
+    → peer: handleReceivedHeartRate → beatLoop (Taptic Engine)
+```
+
+iPhone also runs `HKObserverQuery` as fallback (Watch→HealthKit background sync, every 5-10 min — much less real-time).
+
+### Key State (ChatViewModel)
+- `@Published var isHeartRateMode: Bool` — self is currently sending HR
+- `@Published var currentBPM: Int?` — own current BPM (from Watch or HealthKit)
+- `@Published var peerBPM: Int?` — peer's latest BPM (received via WebSocket)
+- `@Published var heartRateModeError: String?` — shown as alert (HealthKit denied, Watch hint)
+- `private var hapticLoopActive: Bool` — controls beatLoop lifecycle
+- `private var wcAdapter: WCAdapter?` — NSObject wrapper for WCSessionDelegate (ChatViewModel can't inherit NSObject)
+
+### Button display condition
+`canUseHeartRateMode = peerPublicKey != nil && peerIsOnline`
+
+Button shown when `canUseHeartRateMode || isHeartRateMode || peerBPM != nil`.
+UI layout: `[peerBPM rose-pink] [heart icon] [myBPM red]`
+- Peer BPM text and heart icon (receiving-only): `Color(red: 1.0, green: 0.6, blue: 0.8)` (custom rose pink)
+- Own BPM text and heart icon (sending): `.red`
+- Inactive heart (not sending, not receiving): `.white` outline
+
+`peerIsOnline = true` is set in two places:
+- `room_joined` handler: when `peer_public_key` is present (guest joins, host already in room)
+- `user_joined` handler: when host receives guest joining
+- `peer_status: online` response (pinned rooms)
+
+`peerIsOnline = false` is set in `user_left` handler.
+
+### Start flow (startHeartRateMode)
+1. Check `HKHealthStore.isHealthDataAvailable()` → error if false
+2. `requestAuthorization` for `.heartRate` → error alert if denied
+3. Start `HKObserverQuery` + immediate `fetchLatestHeartRate`
+4. On main thread: `isHeartRateMode = true`, schedule 3s timer
+5. If Watch reachable: `sendMessage(["action": "start_heart_rate"])`
+6. Else if Watch paired: set `heartRateModeError` prompt to open Watch app manually
+
+### Stop flow (stopHeartRateMode(notifyPeer: Bool = true))
+- Guard `isHeartRateMode` (no-op if already stopped)
+- Set `isHeartRateMode = false`, invalidate timer, clear `currentBPM`, stop HKObserverQuery
+- If `notifyPeer`: `sendHeartRate(bpm: -1)` to signal peer
+- Always sends `stop_heart_rate` to Watch via WCSession if reachable
+
+### stopPeerHeartRate() — clears received HR state
+Sets `hapticLoopActive = false`, `peerBPM = nil` (stops beatLoop and clears peer display).
+
+### sendHeartRate(bpm:)
+Encrypts BPM string (or "-1") with peer public key and sends `heart_rate` WebSocket action.
+No `canUseHeartRateMode` guard — relies on `encryptMessage` returning nil safely if peer key is gone.
+BPM = -1 is the stop signal.
+
+### handleReceivedHeartRate(bpm:)
+- If bpm == -1: call `stopPeerHeartRate()`, return
+- Else: set `peerBPM = bpm`; if `hapticLoopActive` already, loop reads latest value automatically
+- First call: set `hapticLoopActive = true`, create heavy+medium generators, start `beatLoop`
+
+### beatLoop (continuous haptic rhythm)
+Recursive `DispatchQueue.asyncAfter` — reads `peerBPM` fresh each cycle:
+```
+interval = 60.0 / bpm
+gap = 0.5 - 0.0021 * bpm   (lub-dub spacing)
+heavy.impactOccurred()
+→ after gap: medium.impactOccurred()
+→ after (interval - gap): beatLoop recurses
+```
+Stops when `hapticLoopActive == false` or `peerBPM == nil`.
+
+### Cleanup triggers (all call stopPeerHeartRate + stopHeartRateMode(notifyPeer: false))
+- `user_left`: peer left non-pinned room
+- `room_closed`: host left (guest receives this)
+- `peer_status: offline`: peer disconnected from pinned room
+- `room_unpinned`: peer force-unpinned
+
+### leaveRoom() cleanup
+Calls `stopHeartRateMode()` (notifyPeer: true — sends -1 to peer) then `stopPeerHeartRate()`.
+
+### WCAdapter
+`private class WCAdapter: NSObject, WCSessionDelegate` at bottom of ContentView.swift.
+Receives `["bpm": X]` from Watch → calls closure → `currentBPM = bpm` on main thread.
+
+### watchOS companion app (UnspokenWatch Watch App/)
+- `HeartRateManager.swift`: `NSObject, ObservableObject`; uses `DelegateAdapter: NSObject` for HKWorkoutSession/HKLiveWorkoutBuilder/WCSession delegates
+- Receives `start_heart_rate` / `stop_heart_rate` via WCSession → starts/stops `HKWorkoutSession`
+- `HKLiveWorkoutBuilderDelegate.workoutBuilder(_:didCollectDataOf:)` → extracts BPM → `sendMessage(["bpm": X])`
+- Build config: must NOT have `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` or `SWIFT_APPROACHABLE_CONCURRENCY = YES` (causes ObservableObject conformance failure)
+- Requires HealthKit capability + `NSHealthShareUsageDescription` + `NSHealthUpdateUsageDescription` in Watch target
+
+### Server relay (unspoken.py)
+`heart_rate` action: same pattern as `typing` — direct relay to peer, no queuing.
+
 ## Conventions
 
 - Always use English in git commit messages

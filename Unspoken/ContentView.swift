@@ -28,12 +28,13 @@ class ChatViewModel: ObservableObject {
     @Published var pinRequestReceived: Bool = false
     @Published var isHeartRateMode: Bool = false
     @Published var currentBPM: Int? = nil
+    @Published var peerBPM: Int?
+    @Published var heartRateModeError: String?
 
     private var socket: WebSocket?
     private var healthStore: HKHealthStore?
     private var heartRateTimer: Timer?
     private var hapticLoopActive = false
-    private var peerBPM: Int?
     private var hkObserverQuery: HKObserverQuery?
     private let userId: String = {
         let key = "stableUserId"
@@ -275,6 +276,7 @@ class ChatViewModel: ObservableObject {
 
     func leaveRoom() {
         stopHeartRateMode()
+        stopPeerHeartRate()
         if isPinned {
             // Pinned: send leave, hide rejoin card until Face ID unlock
             let message: [String: Any] = ["action": "leave_room", "room_id": roomId, "role": role, "user_id": userId]
@@ -481,17 +483,26 @@ class ChatViewModel: ObservableObject {
     // MARK: - Heart Rate Mode
 
     var canUseHeartRateMode: Bool {
-        peerPublicKey != nil && (!isPinned || peerIsOnline)
+        peerPublicKey != nil && peerIsOnline
     }
 
     func startHeartRateMode() {
-        guard HKHealthStore.isHealthDataAvailable() else { return }
+        guard HKHealthStore.isHealthDataAvailable() else {
+            heartRateModeError = "Health data is not available on this device."
+            return
+        }
         let store = HKHealthStore()
         healthStore = store
         guard let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
 
         store.requestAuthorization(toShare: nil, read: [heartRateType]) { [weak self] success, _ in
-            guard let self = self, success else { return }
+            guard let self = self else { return }
+            guard success else {
+                DispatchQueue.main.async {
+                    self.heartRateModeError = "Please allow Health access in Settings to share your heart rate."
+                }
+                return
+            }
 
             let query = HKObserverQuery(sampleType: heartRateType, predicate: nil) { [weak self] _, completionHandler, error in
                 guard error == nil else { completionHandler(); return }
@@ -506,6 +517,8 @@ class ChatViewModel: ObservableObject {
                 self.isHeartRateMode = true
                 if WCSession.isSupported() && WCSession.default.isReachable {
                     WCSession.default.sendMessage(["action": "start_heart_rate"], replyHandler: nil, errorHandler: nil)
+                } else if WCSession.isSupported() && WCSession.default.isPaired {
+                    self.heartRateModeError = "Please open the Unspoken app on your Apple Watch for real-time heart rate."
                 }
                 self.heartRateTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
                     guard let self = self, let bpm = self.currentBPM else { return }
@@ -515,20 +528,27 @@ class ChatViewModel: ObservableObject {
         }
     }
 
-    func stopHeartRateMode() {
-        if WCSession.isSupported() && WCSession.default.isReachable {
-            WCSession.default.sendMessage(["action": "stop_heart_rate"], replyHandler: nil, errorHandler: nil)
-        }
+    func stopHeartRateMode(notifyPeer: Bool = true) {
+        guard isHeartRateMode else { return }
+        isHeartRateMode = false
         heartRateTimer?.invalidate()
         heartRateTimer = nil
-        hapticLoopActive = false
-        peerBPM = nil
+        currentBPM = nil
         if let query = hkObserverQuery {
             healthStore?.stop(query)
             hkObserverQuery = nil
         }
-        isHeartRateMode = false
-        currentBPM = nil
+        if notifyPeer {
+            sendHeartRate(bpm: -1)
+        }
+        if WCSession.isSupported() && WCSession.default.isReachable {
+            WCSession.default.sendMessage(["action": "stop_heart_rate"], replyHandler: nil, errorHandler: nil)
+        }
+    }
+
+    func stopPeerHeartRate() {
+        hapticLoopActive = false
+        peerBPM = nil
     }
 
     private func fetchLatestHeartRate(store: HKHealthStore) {
@@ -543,8 +563,7 @@ class ChatViewModel: ObservableObject {
     }
 
     func sendHeartRate(bpm: Int) {
-        guard canUseHeartRateMode,
-              let (encryptedAESKey, encryptedContent) = encryptMessage("\(bpm)") else { return }
+        guard let (encryptedAESKey, encryptedContent) = encryptMessage("\(bpm)") else { return }
         let message: [String: Any] = [
             "action": "heart_rate",
             "room_id": roomId,
@@ -556,6 +575,10 @@ class ChatViewModel: ObservableObject {
     }
 
     func handleReceivedHeartRate(bpm: Int) {
+        if bpm == -1 {
+            stopPeerHeartRate()
+            return
+        }
         peerBPM = bpm
         guard !hapticLoopActive else { return }
         hapticLoopActive = true
@@ -648,6 +671,7 @@ extension ChatViewModel: WebSocketDelegate {
                                                                 &error) {
                         self.peerPublicKey = peerPublicKey
                         self.peerUserId = peerUserId
+                        self.peerIsOnline = true
                         print("Received and set peer public key")
                         if self.isPinned {
                             self.messages.append(Message(content: "Rejoined pinned room. Encrypted channel restored.", isFromMe: false, isTyping: false, isSystem: true))
@@ -670,6 +694,7 @@ extension ChatViewModel: WebSocketDelegate {
                                                                 &error) {
                         self.peerPublicKey = peerPublicKey
                         self.peerUserId = peerUserId
+                        self.peerIsOnline = true
                         print("Received and set peer public key")
                         self.messages.append(Message(content: "\(peerRole.capitalized) joined, Encrypted channel established, enjoy!", isFromMe: false, isTyping: false, isSystem: true))
                     } else {
@@ -680,7 +705,12 @@ extension ChatViewModel: WebSocketDelegate {
                 if let role = json["role"] as? String {
                     self.messages.append(Message(content: "\(role.capitalized) has left the room.", isFromMe: false, isTyping: false, isSystem: true))
                 }
+                self.peerIsOnline = false
+                self.stopPeerHeartRate()
+                self.stopHeartRateMode(notifyPeer: false)
             case "room_closed":
+                self.stopPeerHeartRate()
+                self.stopHeartRateMode(notifyPeer: false)
                 self.messages.append(Message(content: "Host has left the room. The room is closed.", isFromMe: false, isTyping: false, isSystem: true))
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                     self.leaveRoom()
@@ -732,6 +762,8 @@ extension ChatViewModel: WebSocketDelegate {
                 self.messages.append(Message(content: "Pin request was declined.", isFromMe: false, isTyping: false, isSystem: true))
             case "room_unpinned":
                 self.clearPinnedRoom()
+                self.stopPeerHeartRate()
+                self.stopHeartRateMode(notifyPeer: false)
                 self.messages.append(Message(content: "Room has been unpinned by peer.", isFromMe: false, isTyping: false, isSystem: true))
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                     self.isChatOpen = false
@@ -748,7 +780,8 @@ extension ChatViewModel: WebSocketDelegate {
                     self.messages.append(Message(content: statusText, isFromMe: false, isTyping: false, isSystem: true))
                     if status == "offline" {
                         self.typingContent = ""
-                        if self.isHeartRateMode { self.stopHeartRateMode() }
+                        self.stopPeerHeartRate()
+                        self.stopHeartRateMode(notifyPeer: false)
                     }
                 }
             case "pending_messages":
@@ -845,6 +878,14 @@ struct ContentView: View {
         } message: {
             Text("Your peer wants to pin this room. Pinned rooms persist across sessions and support offline messaging. Accept?")
         }
+        .alert("Heart Rate", isPresented: Binding(
+            get: { viewModel.heartRateModeError != nil },
+            set: { if !$0 { viewModel.heartRateModeError = nil } }
+        )) {
+            Button("OK", role: .cancel) { viewModel.heartRateModeError = nil }
+        } message: {
+            Text(viewModel.heartRateModeError ?? "")
+        }
     }
 
     var chatHeader: some View {
@@ -892,8 +933,8 @@ struct ContentView: View {
                 }
             }
 
-            // Heart rate button (when peer is online and encryption ready)
-            if viewModel.canUseHeartRateMode || viewModel.isHeartRateMode {
+            // Heart rate button: show when peer online, self sending, or receiving peer HR
+            if viewModel.canUseHeartRateMode || viewModel.isHeartRateMode || viewModel.peerBPM != nil {
                 Button(action: {
                     if viewModel.isHeartRateMode {
                         viewModel.stopHeartRateMode()
@@ -902,8 +943,13 @@ struct ContentView: View {
                     }
                 }) {
                     HStack(spacing: 3) {
-                        Image(systemName: viewModel.isHeartRateMode ? "heart.fill" : "heart")
-                            .foregroundColor(viewModel.isHeartRateMode ? .red : .white)
+                        if let peerBPM = viewModel.peerBPM {
+                            Text("\(peerBPM)")
+                                .font(.caption.bold())
+                                .foregroundColor(Color(red: 1.0, green: 0.6, blue: 0.8))
+                        }
+                        Image(systemName: viewModel.isHeartRateMode || viewModel.peerBPM != nil ? "heart.fill" : "heart")
+                            .foregroundColor(viewModel.isHeartRateMode ? .red : (viewModel.peerBPM != nil ? Color(red: 1.0, green: 0.6, blue: 0.8) : .white))
                             .scaleEffect(heartPulse ? 1.2 : 1.0)
                             .onChange(of: viewModel.isHeartRateMode) { active in
                                 if active {
