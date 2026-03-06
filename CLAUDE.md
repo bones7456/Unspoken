@@ -76,6 +76,17 @@ Pinning makes a room persistent — surviving server restarts, app restarts, and
 - **Client:** RSA key pair + room metadata (roomId, role, server, peer key/id) saved to UserDefaults. Key pair is restored on launch (to keep server-side key consistency), but room metadata requires Face ID / Touch ID to unlock (see below). `RoomSelectionView` shows a "Rejoin Pinned Room" card only after biometric unlock.
 - **UI:** Yellow pin icon + online indicator in chat header. Orange "Leave" (temporary) + red "Unpin" (permanent) buttons. Pin request shown as an alert with Accept/Decline. Input placeholder changes when peer is offline.
 
+### Pinned room rejoin — public key validation (server)
+When a client rejoins a pinned room (`join_room` on a pinned `room_id`), the server checks the submitted `public_key` against the one stored in `pinned_rooms.json` **before** assigning the room slot or sending `room_joined`:
+- **Match (or no key sent):** rejoin proceeds normally.
+- **Mismatch:** server responds with `error` ("Key mismatch: your key has changed…") and aborts the rejoin via `continue`.
+
+Rationale: pending messages were encrypted with the stored key. Accepting a new key would make them permanently undecryptable. The client should unpin and start a fresh room if the key is lost.
+
+`save_pinned_rooms()` is called in two places only:
+1. `accept_pin` — room first pinned
+2. `unpin_room` — room deleted from file
+
 ### Face ID / Biometric unlock
 Pinned room metadata is protected by biometric authentication (`LocalAuthentication` framework):
 - `ChatViewModel.init()` restores saved key pair from UserDefaults (falls back to generating new keys if none saved). Room metadata is NOT loaded at launch.

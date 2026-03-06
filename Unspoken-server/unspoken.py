@@ -188,6 +188,19 @@ async def handle_connection(websocket):
                         rejoin_role = 'guest'
 
                     if rejoin_role:
+                        # Reject rejoin if client presents a different public key —
+                        # pending messages were encrypted with the stored key and would be undecryptable.
+                        if 'public_key' in data:
+                            stored_key = pin_info.get(f'{rejoin_role}_public_key', '')
+                            if stored_key and data['public_key'] != stored_key:
+                                error_message = json.dumps({
+                                    'action': 'error',
+                                    'message': 'Key mismatch: your key has changed and no longer matches this pinned room. Please unpin and start a new room.'
+                                })
+                                await websocket.send(error_message)
+                                log_message("SENT", user_id, error_message)
+                                continue
+
                         # Assign user back into room slot
                         if room_id not in rooms:
                             rooms[room_id] = {'host': None, 'guest': None, 'messages': [], 'pinned': True}
@@ -237,7 +250,7 @@ async def handle_connection(websocket):
                                 'role': other_role,
                                 'peer_role': rejoin_role,
                                 'peer_user_id': user_id,
-                                'peer_public_key': user_public_keys.get(user_id, pin_info[f'{rejoin_role}_public_key'])
+                                'peer_public_key': pin_info[f'{rejoin_role}_public_key']
                             })
                             await connected_users[peer_user_id].send(notification)
                             log_message("SENT", peer_user_id, notification)
@@ -249,12 +262,6 @@ async def handle_connection(websocket):
                             })
                             await connected_users[peer_user_id].send(status_notification)
                             log_message("SENT", peer_user_id, status_notification)
-
-                        # Update stored public key if client sent one
-                        if 'public_key' in data:
-                            pin_info[f'{rejoin_role}_public_key'] = data['public_key']
-                            user_public_keys[user_id] = data['public_key']
-                            save_pinned_rooms()
                     else:
                         error_message = json.dumps({
                             'action': 'error',
