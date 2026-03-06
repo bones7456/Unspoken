@@ -671,7 +671,11 @@ extension ChatViewModel: WebSocketDelegate {
                                                                 &error) {
                         self.peerPublicKey = peerPublicKey
                         self.peerUserId = peerUserId
-                        self.peerIsOnline = true
+                        // Only set online here if peer_status wasn't explicitly provided
+                        // (pinned room rejoin always sends peer_status; normal join does not)
+                        if (json["peer_status"] as? String) == nil {
+                            self.peerIsOnline = true
+                        }
                         print("Received and set peer public key")
                         if self.isPinned {
                             self.messages.append(Message(content: "Rejoined pinned room. Encrypted channel restored.", isFromMe: false, isTyping: false, isSystem: true))
