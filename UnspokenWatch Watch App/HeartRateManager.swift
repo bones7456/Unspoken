@@ -28,7 +28,7 @@ class HeartRateManager: NSObject, ObservableObject {
     func requestAuthorization() {
         guard HKHealthStore.isHealthDataAvailable() else { return }
         guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
-        healthStore.requestAuthorization(toShare: [HKObjectType.workoutType()], read: [hrType]) { _, _ in }
+        healthStore.requestAuthorization(toShare: [], read: [hrType]) { _, _ in }
     }
 
     func startSession() {
@@ -52,7 +52,7 @@ class HeartRateManager: NSObject, ObservableObject {
         guard isSessionActive else { return }
         workoutSession?.end()
         builder?.endCollection(withEnd: Date()) { [weak self] _, _ in
-            self?.builder?.finishWorkout { _, _ in }
+            self?.builder?.discardWorkout()
         }
         DispatchQueue.main.async {
             self.isSessionActive = false

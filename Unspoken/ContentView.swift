@@ -51,6 +51,7 @@ class ChatViewModel: ObservableObject {
 
     private var pendingAction: (() -> Void)?
     private var wcAdapter: WCAdapter?
+    private var heartRateBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     // MARK: - UserDefaults keys for pin persistence
     private let kPinnedRoomId = "pinnedRoomId"
@@ -71,6 +72,31 @@ class ChatViewModel: ObservableObject {
         }
         self.serverAddress = "wss://\(serverHost):\(serverPort)"
         setupWatchConnectivity()
+        setupBackgroundTaskObservers()
+    }
+
+    private func setupBackgroundTaskObservers() {
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.beginHeartRateBackgroundTaskIfNeeded()
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.endHeartRateBackgroundTask()
+        }
+    }
+
+    private func beginHeartRateBackgroundTaskIfNeeded() {
+        guard isHeartRateMode, heartRateBackgroundTask == .invalid else { return }
+        heartRateBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "HeartRateTransmission") { [weak self] in
+            // 系统到期时优雅停止
+            self?.stopHeartRateMode(notifyPeer: true)
+            self?.endHeartRateBackgroundTask()
+        }
+    }
+
+    private func endHeartRateBackgroundTask() {
+        guard heartRateBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(heartRateBackgroundTask)
+        heartRateBackgroundTask = .invalid
     }
 
     private func setupWatchConnectivity() {
@@ -533,6 +559,7 @@ class ChatViewModel: ObservableObject {
         isHeartRateMode = false
         heartRateTimer?.invalidate()
         heartRateTimer = nil
+        endHeartRateBackgroundTask()
         currentBPM = nil
         if let query = hkObserverQuery {
             healthStore?.stop(query)
