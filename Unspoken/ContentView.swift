@@ -857,6 +857,7 @@ struct ContentView: View {
     @State private var messageText: String = ""
     @State private var showBlockedWordAlert: Bool = false
     @State private var showCopySuccessAlert: Bool = false
+    @State private var showUnpinConfirm: Bool = false
     @State private var heartPulse: Bool = false
     @FocusState private var isTextFieldFocused: Bool
 
@@ -1017,14 +1018,15 @@ struct ContentView: View {
                 }
                 // Unpin button (permanent)
                 Button(action: {
-                    viewModel.unpinRoom()
+                    showUnpinConfirm = true
                 }) {
                     Text("Unpin")
+                        .font(.caption)
                         .foregroundColor(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(Color.red.opacity(0.8))
-                        .cornerRadius(8)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.red.opacity(0.7))
+                        .cornerRadius(6)
                 }
             } else {
                 Button(action: {
@@ -1041,6 +1043,12 @@ struct ContentView: View {
         }
         .padding()
         .background(Color.black.opacity(0.2))
+        .alert("Unpin this room?", isPresented: $showUnpinConfirm) {
+            Button("Unpin", role: .destructive) { viewModel.unpinRoom() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete the room on both devices and the server, including any pending messages. This cannot be undone.")
+        }
     }
 
     var chatMessages: some View {
