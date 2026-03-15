@@ -30,6 +30,8 @@ class ChatViewModel: ObservableObject {
     @Published var currentBPM: Int? = nil
     @Published var peerBPM: Int?
     @Published var heartRateModeError: String?
+    @Published var peerLubTick: Int = 0
+    @Published var peerDubTick: Int = 0
 
     private var socket: WebSocket?
     private var healthStore: HKHealthStore?
@@ -310,6 +312,8 @@ class ChatViewModel: ObservableObject {
             isChatOpen = false
             isPinned = false
             peerIsOnline = false
+            roomId = ""
+            role = ""
             messages = []
             typingContent = ""
             pinRequestPending = false
@@ -624,9 +628,11 @@ class ChatViewModel: ObservableObject {
         let interval = 60.0 / Double(bpm)
         let gap = 0.5 - 0.0021 * Double(bpm)
         heavy.impactOccurred()
+        peerLubTick += 1
         DispatchQueue.main.asyncAfter(deadline: .now() + gap) { [weak self] in
             guard let self, self.hapticLoopActive else { return }
             medium.impactOccurred()
+            self.peerDubTick += 1
             DispatchQueue.main.asyncAfter(deadline: .now() + (interval - gap)) { [weak self] in
                 self?.beatLoop(heavy: heavy, medium: medium)
             }
@@ -859,6 +865,7 @@ struct ContentView: View {
     @State private var showCopySuccessAlert: Bool = false
     @State private var showUnpinConfirm: Bool = false
     @State private var heartPulse: Bool = false
+    @State private var bgHeartScale: CGFloat = 1.0
     @FocusState private var isTextFieldFocused: Bool
 
     var canSendMessage: Bool {
@@ -1020,13 +1027,10 @@ struct ContentView: View {
                 Button(action: {
                     showUnpinConfirm = true
                 }) {
-                    Text("Unpin")
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Color.red.opacity(0.7))
-                        .cornerRadius(6)
+                    Image(systemName: "pin.slash")
+                        .font(.system(size: 14))
+                        .foregroundColor(.red.opacity(0.8))
+                        .padding(6)
                 }
             } else {
                 Button(action: {
@@ -1052,6 +1056,23 @@ struct ContentView: View {
     }
 
     var chatMessages: some View {
+        ZStack {
+            // Background heartbeat animation (receiver side)
+            ZStack {
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 220))
+                    .foregroundColor(.white)
+                    .opacity(0.22)
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 185))
+                    .foregroundColor(Color(red: 1.0, green: 0.6, blue: 0.8))
+                    .opacity(0.55)
+            }
+            .opacity(viewModel.peerBPM != nil ? 1 : 0)
+            .scaleEffect(bgHeartScale)
+            .animation(.easeInOut(duration: 0.6), value: viewModel.peerBPM != nil)
+            .allowsHitTesting(false)
+
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 2) {
@@ -1085,6 +1106,19 @@ struct ContentView: View {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
+        }
+        } // ZStack
+        .onChange(of: viewModel.peerLubTick) { _ in
+            withAnimation(.easeOut(duration: 0.08)) { bgHeartScale = 1.15 }
+        }
+        .onChange(of: viewModel.peerDubTick) { _ in
+            withAnimation(.easeOut(duration: 0.06)) { bgHeartScale = 1.08 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                withAnimation(.easeIn(duration: 0.25)) { bgHeartScale = 1.0 }
+            }
+        }
+        .onChange(of: viewModel.peerBPM) { newBPM in
+            if newBPM == nil { bgHeartScale = 1.0 }
         }
     }
 
