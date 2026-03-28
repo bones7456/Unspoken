@@ -156,6 +156,17 @@ struct RoomSelectionView: View {
                                             .keyboardType(.numberPad)
                                     }
                                 }
+
+                                #if DEBUG
+                                HStack {
+                                    Toggle(isOn: $chatViewModel.useSSL) {
+                                        Label("Use SSL (wss://)", systemImage: "lock")
+                                            .font(.caption)
+                                            .foregroundColor(.white)
+                                    }
+                                    .toggleStyle(SwitchToggleStyle(tint: .green))
+                                }
+                                #endif
                             }
                             .frame(maxWidth: min(300, geometry.size.width * 0.8))
                             .padding()

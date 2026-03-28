@@ -91,13 +91,30 @@ def restore_pinned_rooms():
         if room_id not in pending_messages:
             pending_messages[room_id] = {"for_host": [], "for_guest": []}
 
+_TRUNCATE_KEYS = {"encrypted_content", "encrypted_aes_key", "public_key", "peer_public_key", "host_public_key", "guest_public_key"}
+_TRUNCATE_LEN = 16
+
+def _format_log_payload(message):
+    """Format a JSON message string for logging, truncating large fields."""
+    try:
+        data = json.loads(message)
+        parts = []
+        for k, v in data.items():
+            if k in _TRUNCATE_KEYS and isinstance(v, str) and len(v) > _TRUNCATE_LEN:
+                parts.append(f"{k}={v[:_TRUNCATE_LEN]}…")
+            else:
+                parts.append(f"{k}={json.dumps(v, ensure_ascii=False)}")
+        return "{" + ", ".join(parts) + "}"
+    except (json.JSONDecodeError, AttributeError):
+        return message
+
 def log_message(direction, user_id, message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if direction == "SYSTEM":
-        direction_symbol = "||"
+        print(f"[{timestamp}] || {user_id}: {message}")
     else:
-        direction_symbol = ">>" if direction == "RECEIVED" else "<<"
-    print(f"[{timestamp}] {direction_symbol} {user_id}: {message}")
+        symbol = ">>" if direction == "RECEIVED" else "<<"
+        print(f"[{timestamp}] {symbol} {user_id}: {_format_log_payload(message)}")
 
 async def check_available_user_in_data(data, websocket):
     if 'user_id' in data and data['user_id'] not in load_blocked_users():
@@ -417,17 +434,27 @@ async def handle_connection(websocket):
                         log_message("SENT", other_user_id, notification)
                     elif is_pinned(room_id):
                         # Peer is offline, queue message for pinned room
-                        queue_key = f"for_{other_role}"
-                        if room_id not in pending_messages:
-                            pending_messages[room_id] = {"for_host": [], "for_guest": []}
-                        pending_messages[room_id][queue_key].append({
-                            'role': role,
-                            'encrypted_aes_key': encrypted_aes_key,
-                            'encrypted_content': encrypted_content,
-                            'timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-                        })
-                        save_pending_messages()
-                        log_message("SYSTEM", "Server", f"Queued message for offline peer in pinned room {room_id}")
+                        MAX_PENDING_BYTES = 5 * 1024 * 1024  # 5 MB
+                        msg_size = len(encrypted_content.encode('utf-8'))
+                        if msg_size > MAX_PENDING_BYTES:
+                            error_message = json.dumps({
+                                'action': 'error',
+                                'message': 'Message too large to queue for offline peer (max 5 MB).'
+                            })
+                            await websocket.send(error_message)
+                            log_message("SENT", user_id, error_message)
+                        else:
+                            queue_key = f"for_{other_role}"
+                            if room_id not in pending_messages:
+                                pending_messages[room_id] = {"for_host": [], "for_guest": []}
+                            pending_messages[room_id][queue_key].append({
+                                'role': role,
+                                'encrypted_aes_key': encrypted_aes_key,
+                                'encrypted_content': encrypted_content,
+                                'timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+                            })
+                            save_pending_messages()
+                            log_message("SYSTEM", "Server", f"Queued message for offline peer in pinned room {room_id}")
 
             elif action == 'request_pin':
                 room_id = data['room_id']
@@ -611,21 +638,31 @@ async def handle_report_user(websocket, message):
             del connected_users[reported_user_id]
 
 if __name__ == '__main__':
-    HOST = "0.0.0.0"
-    PORT = 8765
-    SSL_CERT = "/etc/letsencrypt/live/unspoken.luy.li/fullchain.pem"
-    SSL_KEY = "/etc/letsencrypt/live/unspoken.luy.li/privkey.pem"
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_context.load_cert_chain(certfile=SSL_CERT, keyfile=SSL_KEY)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--no-ssl', action='store_true', help='Disable TLS (for local development)')
+    parser.add_argument('--port', type=int, default=8765)
+    args = parser.parse_args()
 
+    HOST = "0.0.0.0"
+    PORT = args.port
+
+    if args.no_ssl:
+        ssl_context = None
+    else:
+        SSL_CERT = "/etc/letsencrypt/live/unspoken.luy.li/fullchain.pem"
+        SSL_KEY = "/etc/letsencrypt/live/unspoken.luy.li/privkey.pem"
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_context.load_cert_chain(certfile=SSL_CERT, keyfile=SSL_KEY)
 
     async def main():
         # Load persistence on startup
         load_pinned_rooms()
         load_pending_messages()
         restore_pinned_rooms()
+        mode = "ws" if ssl_context is None else "wss"
         log_message("SYSTEM", "Server", f"Loaded {len(pinned_rooms)} pinned rooms")
-        log_message("SYSTEM", "Server", f"Starting server at {HOST}:{PORT}")
+        log_message("SYSTEM", "Server", f"Starting server at {mode}://{HOST}:{PORT}")
         async with websockets.serve(handle_connection, HOST, PORT, ssl=ssl_context):
             await asyncio.Future()  # 运行直到被取消
 

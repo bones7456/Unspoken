@@ -12,6 +12,7 @@ import LocalAuthentication
 import HealthKit
 import UIKit
 import WatchConnectivity
+import ImageIO
 
 class ChatViewModel: ObservableObject {
     @Published var messages: [Message] = []
@@ -21,6 +22,9 @@ class ChatViewModel: ObservableObject {
     @Published var serverAddress: String = "wss://unspoken.luy.li:8765"
     @Published var serverHost: String = "unspoken.luy.li"
     @Published var serverPort: String = "8765"
+    #if DEBUG
+    @Published var useSSL: Bool = true
+    #endif
     @Published var role: String = ""
     @Published var isPinned: Bool = false
     @Published var peerIsOnline: Bool = false
@@ -461,8 +465,25 @@ class ChatViewModel: ObservableObject {
         sendJSON(message)
     }
 
+    private func wrapPayload(type: String, data: String) -> String {
+        let obj: [String: String] = ["type": type, "data": data]
+        if let d = try? JSONSerialization.data(withJSONObject: obj),
+           let s = String(data: d, encoding: .utf8) { return s }
+        return data
+    }
+
+    private func unwrapPayload(_ plaintext: String) -> (type: String, data: String) {
+        if let d = plaintext.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: d) as? [String: String],
+           let type = obj["type"], let data = obj["data"] {
+            return (type, data)
+        }
+        return ("text", plaintext) // legacy fallback
+    }
+
     func sendMessage(content: String) {
-        guard let (encryptedAESKey, encryptedContent) = encryptMessage(content) else { return }
+        let payload = wrapPayload(type: "text", data: content)
+        guard let (encryptedAESKey, encryptedContent) = encryptMessage(payload) else { return }
 
         let message = [
             "action": "send_message",
@@ -474,6 +495,25 @@ class ChatViewModel: ObservableObject {
 
         sendJSON(message)
         messages.append(Message(content: content, isFromMe: true, isTyping: false))
+    }
+
+    func sendImage(_ imageData: Data) {
+        guard peerPublicKey != nil else { return }
+        let base64 = imageData.base64EncodedString()
+        let payload = wrapPayload(type: "image", data: base64)
+        guard let encrypted = encryptMessage(payload) else { return }
+        let message: [String: Any] = [
+            "action": "send_message",
+            "room_id": roomId,
+            "role": role,
+            "encrypted_aes_key": encrypted.0,
+            "encrypted_content": encrypted.1
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: message),
+           let jsonString = String(data: data, encoding: .utf8) {
+            socket?.write(string: jsonString)
+        }
+        self.messages.append(Message(content: "", isFromMe: true, isTyping: false, imageData: imageData))
     }
 
     private func sendJSON(_ dictionary: [String: Any]) {
@@ -489,10 +529,15 @@ class ChatViewModel: ObservableObject {
     }
 
     func updateServerAddress(address: String, port: String) {
-        print("Server set to \(address):\(port)")
         self.serverHost = address
         self.serverPort = port
-        self.serverAddress = "wss://\(address):\(port)"
+        #if DEBUG
+        let scheme = useSSL ? "wss" : "ws"
+        #else
+        let scheme = "wss"
+        #endif
+        self.serverAddress = "\(scheme)://\(address):\(port)"
+        print("Server set to \(serverAddress)")
         setupWebSocket()
     }
 
@@ -769,7 +814,12 @@ extension ChatViewModel: WebSocketDelegate {
                 if let encryptedAESKey = json["encrypted_aes_key"] as? String,
                    let encryptedContent = json["encrypted_content"] as? String,
                    let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
-                    self.messages.append(Message(content: decryptedContent, isFromMe: false, isTyping: false))
+                    let (type, data) = self.unwrapPayload(decryptedContent)
+                    if type == "image", let imgData = Data(base64Encoded: data) {
+                        self.messages.append(Message(content: "", isFromMe: false, isTyping: false, imageData: imgData))
+                    } else {
+                        self.messages.append(Message(content: data, isFromMe: false, isTyping: false))
+                    }
                 }
 
             // MARK: - Pin protocol handlers
@@ -829,7 +879,12 @@ extension ChatViewModel: WebSocketDelegate {
                            let encryptedContent = msg["encrypted_content"] as? String,
                            let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
                             let timestamp = (msg["timestamp"] as? String).flatMap { isoFormatter.date(from: $0) }
-                            self.messages.append(Message(content: decryptedContent, isFromMe: false, isTyping: false, timestamp: timestamp))
+                            let (type, data) = self.unwrapPayload(decryptedContent)
+                            if type == "image", let imgData = Data(base64Encoded: data) {
+                                self.messages.append(Message(content: "", isFromMe: false, isTyping: false, timestamp: timestamp, imageData: imgData))
+                            } else {
+                                self.messages.append(Message(content: data, isFromMe: false, isTyping: false, timestamp: timestamp))
+                            }
                         }
                     }
                 }
@@ -870,6 +925,11 @@ struct ContentView: View {
     @State private var bgHeartScale: CGFloat = 1.0
     @State private var showTimestamps: Bool = false
     @FocusState private var isTextFieldFocused: Bool
+    @State private var showImageSourceDialog: Bool = false
+    @State private var showImagePicker: Bool = false
+    @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
+    @State private var selectedImage: UIImage? = nil
+    @State private var fullScreenImage: UIImage? = nil
 
     var canSendMessage: Bool {
         return viewModel.peerPublicKey != nil
@@ -1082,7 +1142,9 @@ struct ContentView: View {
                     ForEach(viewModel.messages) { message in
                         MessageView(message: message, onReport: {
                             viewModel.reportUser()
-                        }, showTimestamp: showTimestamps)
+                        }, showTimestamp: showTimestamps, onImageTap: { image in
+                            fullScreenImage = image
+                        })
                     }
                     if !viewModel.typingContent.isEmpty {
                         MessageView(
@@ -1135,10 +1197,53 @@ struct ContentView: View {
         .onChange(of: viewModel.peerBPM) { newBPM in
             if newBPM == nil { bgHeartScale = 1.0 }
         }
+        .confirmationDialog("Send Image", isPresented: $showImageSourceDialog) {
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button("Take Photo") {
+                    imagePickerSource = .camera
+                    showImagePicker = true
+                }
+            }
+            Button("Choose from Library") {
+                imagePickerSource = .photoLibrary
+                showImagePicker = true
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showImagePicker) {
+            ImagePicker(sourceType: imagePickerSource) { image in
+                selectedImage = image
+                showImagePicker = false
+            }
+        }
+        .onChange(of: selectedImage) { image in
+            guard let image, let data = processImageForSending(image) else { return }
+            viewModel.sendImage(data)
+            selectedImage = nil
+        }
+        .sheet(item: Binding(
+            get: { fullScreenImage.map { IdentifiableImage(image: $0) } },
+            set: { fullScreenImage = $0?.image }
+        )) { item in
+            ZStack {
+                Color.black.ignoresSafeArea()
+                Image(uiImage: item.image)
+                    .resizable()
+                    .scaledToFit()
+            }
+        }
     }
 
     var inputArea: some View {
         HStack(spacing: 10) {
+            Button(action: { showImageSourceDialog = true }) {
+                Image(systemName: "photo")
+                    .foregroundColor(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Color.white.opacity(0.2))
+                    .clipShape(Circle())
+            }
+            .disabled(!canSendMessage)
             TextField(inputPlaceholder, text: $messageText)
                 .padding(.horizontal, 15)
                 .padding(.vertical, 10)
@@ -1228,6 +1333,7 @@ struct MessageView: View {
     let message: Message
     let onReport: () -> Void
     var showTimestamp: Bool = false
+    var onImageTap: (UIImage) -> Void = { _ in }
 
     private static let timeOnlyFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -1267,20 +1373,37 @@ struct MessageView: View {
                     if message.isFromMe {
                         Spacer()
                     }
-                    Text(message.content)
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 10)
-                        .background(message.isFromMe ? Color.blue.opacity(message.isTyping ? 0.4 : 0.8) : Color.purple.opacity(message.isTyping ? 0.4 : 0.8))
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                        .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
-                        .contextMenu {
-                            if !message.isFromMe && !message.isSystem {
-                                Button(role: .destructive, action: onReport) {
-                                    Label("Report User", systemImage: "exclamationmark.triangle")
+                    if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 220)
+                            .cornerRadius(10)
+                            .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+                            .onTapGesture { onImageTap(uiImage) }
+                            .contextMenu {
+                                if !message.isFromMe {
+                                    Button(role: .destructive, action: onReport) {
+                                        Label("Report User", systemImage: "exclamationmark.triangle")
+                                    }
                                 }
                             }
-                        }
+                    } else {
+                        Text(message.content)
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 10)
+                            .background(message.isFromMe ? Color.blue.opacity(message.isTyping ? 0.4 : 0.8) : Color.purple.opacity(message.isTyping ? 0.4 : 0.8))
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                            .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+                            .contextMenu {
+                                if !message.isFromMe && !message.isSystem {
+                                    Button(role: .destructive, action: onReport) {
+                                        Label("Report User", systemImage: "exclamationmark.triangle")
+                                    }
+                                }
+                            }
+                    }
                     if !message.isFromMe {
                         Spacer()
                     }
@@ -1320,12 +1443,81 @@ struct Message: Identifiable {
     let isTyping: Bool
     let isSystem: Bool
     let timestamp: Date?
+    let imageData: Data?
 
-    init(content: String, isFromMe: Bool, isTyping: Bool, isSystem: Bool = false, timestamp: Date? = nil) {
+    init(content: String, isFromMe: Bool, isTyping: Bool, isSystem: Bool = false, timestamp: Date? = nil, imageData: Data? = nil) {
         self.content = content
         self.isFromMe = isFromMe
         self.isTyping = isTyping
         self.isSystem = isSystem
         self.timestamp = timestamp
+        self.imageData = imageData
     }
+}
+
+// MARK: - ImagePicker
+
+struct ImagePicker: UIViewControllerRepresentable {
+    let sourceType: UIImagePickerController.SourceType
+    let onImage: (UIImage) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onImage: onImage) }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = sourceType
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let onImage: (UIImage) -> Void
+        init(onImage: @escaping (UIImage) -> Void) { self.onImage = onImage }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let img = info[.editedImage] as? UIImage ?? info[.originalImage] as? UIImage {
+                onImage(img)
+            }
+            picker.dismiss(animated: true)
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            picker.dismiss(animated: true)
+        }
+    }
+}
+
+// MARK: - IdentifiableImage
+
+private struct IdentifiableImage: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
+// MARK: - Image Processing
+
+private func processImageForSending(_ image: UIImage) -> Data? {
+    let maxDimension: CGFloat = 1200
+    // image.size is in points; multiply by image.scale to get actual pixels.
+    let pixelW = image.size.width * image.scale
+    let pixelH = image.size.height * image.scale
+    let ratio = min(maxDimension / pixelW, maxDimension / pixelH, 1.0)
+    let newSize = CGSize(width: (pixelW * ratio).rounded(), height: (pixelH * ratio).rounded())
+
+    // scale = 1.0 so renderer works in pixels directly (avoids screen-scale multiplication).
+    // opaque = true strips alpha channel — HEIC doesn't support AlphaLast pixel format.
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1.0
+    format.opaque = true
+    let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
+    let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
+
+    guard let cgImage = resized.cgImage else { return nil }
+    let data = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(data, "public.heic" as CFString, 1, nil) else { return nil }
+    CGImageDestinationAddImage(dest, cgImage, [kCGImageDestinationLossyCompressionQuality: 0.75] as CFDictionary)
+    guard CGImageDestinationFinalize(dest) else { return nil }
+    return data as Data
 }
