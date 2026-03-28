@@ -70,7 +70,7 @@ struct RoomSelectionView: View {
                     .edgesIgnoringSafeArea(.all)
 
                 ScrollView {
-                    VStack(spacing: 30) {
+                    VStack(spacing: 24) {
                         Text("Unspoken")
                             .font(.system(size: 48, weight: .bold, design: .rounded))
                             .foregroundColor(.white)
@@ -131,59 +131,51 @@ struct RoomSelectionView: View {
                         }
 
                         if !chatViewModel.isPinned {
-                            VStack(spacing: 15) {
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text("Server")
-                                        .font(.caption)
-                                        .foregroundColor(.white)
-                                    HStack {
-                                        Image(systemName: "server.rack")
-                                            .foregroundColor(.white)
-                                        TextField("Address", text: $chatViewModel.serverHost)
-                                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                                    }
-                                }
+                            let cardWidth = min(geometry.size.width - 48, 340.0)
 
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text("Port")
-                                        .font(.caption)
-                                        .foregroundColor(.white)
-                                    HStack {
-                                        Image(systemName: "network")
-                                            .foregroundColor(.white)
-                                        TextField("Port", text: $chatViewModel.serverPort)
-                                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                                            .keyboardType(.numberPad)
-                                    }
-                                }
-
+                            // Server settings card
+                            VStack(spacing: 0) {
+                                serverField(icon: "server.rack", label: "Server",
+                                            placeholder: "Address", text: $chatViewModel.serverHost)
+                                Divider().background(Color.white.opacity(0.25)).padding(.leading, 44)
+                                serverField(icon: "network", label: "Port",
+                                            placeholder: "Port", text: $chatViewModel.serverPort,
+                                            keyboard: .numberPad)
                                 #if DEBUG
-                                HStack {
-                                    Toggle(isOn: $chatViewModel.useSSL) {
-                                        Label("Use SSL (wss://)", systemImage: "lock")
-                                            .font(.caption)
-                                            .foregroundColor(.white)
-                                    }
-                                    .toggleStyle(SwitchToggleStyle(tint: .green))
+                                Divider().background(Color.white.opacity(0.25)).padding(.leading, 44)
+                                HStack(spacing: 12) {
+                                    Image(systemName: "lock")
+                                        .frame(width: 20)
+                                        .foregroundColor(.white.opacity(0.7))
+                                    Text("Use SSL (wss://)")
+                                        .font(.subheadline)
+                                        .foregroundColor(.white)
+                                    Spacer()
+                                    Toggle("", isOn: $chatViewModel.useSSL)
+                                        .labelsHidden()
+                                        .toggleStyle(SwitchToggleStyle(tint: .green))
                                 }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 12)
                                 #endif
                             }
-                            .frame(maxWidth: min(300, geometry.size.width * 0.8))
-                            .padding()
-                            .background(Color.white.opacity(0.2))
-                            .cornerRadius(15)
+                            .background(Color.white.opacity(0.18))
+                            .cornerRadius(14)
+                            .frame(width: cardWidth)
 
-                            HStack {
+                            // Room ID + Join
+                            HStack(spacing: 10) {
                                 TextField("Room ID", text: $chatViewModel.roomId)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                                    .frame(width: min(120, geometry.size.width * 0.3))
                                     .keyboardType(.numberPad)
+                                    .padding(.vertical, 12)
+                                    .padding(.horizontal, 12)
+                                    .background(Color.white.opacity(0.9))
+                                    .cornerRadius(10)
+                                    .frame(maxWidth: .infinity, minHeight: 44)
 
                                 Button(action: {
                                     if agreeToTerms {
-                                        withAnimation {
-                                            isJoining = true
-                                        }
+                                        withAnimation { isJoining = true }
                                         joinRoom(roomId: chatViewModel.roomId)
                                     } else {
                                         errorMessage = "Please agree to the terms before proceeding."
@@ -192,24 +184,19 @@ struct RoomSelectionView: View {
                                     Text("Join Room")
                                         .fontWeight(.semibold)
                                         .foregroundColor(.white)
-                                        .padding()
-                                        .frame(height: 40)
+                                        .frame(width: 110, height: 44)
                                         .background(canJoin ? Color.green.opacity(0.8) : Color.gray.opacity(0.5))
                                         .cornerRadius(10)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(Color.white, lineWidth: 2)
-                                        )
                                 }
                                 .disabled(!canJoin)
-                                .scaleEffect(isJoining ? 0.9 : 1.0)
+                                .scaleEffect(isJoining ? 0.93 : 1.0)
                             }
+                            .frame(width: cardWidth)
 
+                            // Create Room
                             Button(action: {
                                 if agreeToTerms {
-                                    withAnimation {
-                                        isCreating = true
-                                    }
+                                    withAnimation { isCreating = true }
                                     createRoom()
                                 } else {
                                     errorMessage = "Please agree to the terms before proceeding."
@@ -218,17 +205,13 @@ struct RoomSelectionView: View {
                                 Text("Create Room")
                                     .fontWeight(.semibold)
                                     .foregroundColor(.white)
-                                    .padding()
-                                    .frame(width: min(200, geometry.size.width * 0.5), height: 50)
-                                    .background(canCreate ? Color.blue.opacity(0.8) : Color.gray.opacity(0.5))
-                                    .cornerRadius(10)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 10)
-                                            .stroke(Color.white, lineWidth: 2)
-                                    )
+                                    .frame(width: cardWidth, height: 50)
+                                    .background(canCreate ? Color.blue.opacity(0.85) : Color.gray.opacity(0.5))
+                                    .cornerRadius(12)
+                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.4), lineWidth: 1))
                             }
                             .disabled(!canCreate)
-                            .scaleEffect(isCreating ? 0.9 : 1.0)
+                            .scaleEffect(isCreating ? 0.97 : 1.0)
                         }
 
                         if let error = errorMessage {
@@ -239,26 +222,36 @@ struct RoomSelectionView: View {
                                 .cornerRadius(10)
                         }
 
-                        HStack {
+                        // EULA
+                        HStack(alignment: .center, spacing: 10) {
                             Toggle("", isOn: $agreeToTerms)
                                 .labelsHidden()
-                                .scaleEffect(0.8)
-
-                            Text("By clicking Create or Join, you agree to our ")
-                            + Text("[EULA](http://unspoken.luy.li/EULA.html)")
-                                .foregroundColor(.yellow)
-                            + Text(" and ")
-                            + Text("[Privacy Policy](http://unspoken.luy.li/Privacy.html)")
-                                .foregroundColor(.yellow)
+                                .scaleEffect(0.85)
+                                .frame(width: 44, height: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("By clicking Create or Join, you agree to our")
+                                    .foregroundColor(.white.opacity(0.75))
+                                HStack(spacing: 4) {
+                                    Link("EULA", destination: URL(string: "http://unspoken.luy.li/EULA.html")!)
+                                        .foregroundColor(.yellow)
+                                    Text("and").foregroundColor(.white.opacity(0.75))
+                                    Link("Privacy Policy", destination: URL(string: "http://unspoken.luy.li/Privacy.html")!)
+                                        .foregroundColor(.yellow)
+                                }
+                            }
+                            .font(.footnote)
                         }
-                        .font(.footnote)
-                        .foregroundColor(.gray)
+                        .frame(maxWidth: min(geometry.size.width - 48, 340), alignment: .leading)
                         .padding(.top, 4)
 
-                        Text("To report inappropriate activity, please contact us at: bones7456+unspoken@gmail.com")
-                            .font(.footnote)
-                            .foregroundColor(.gray)
-                            .padding(.top, 4)
+                        VStack(spacing: 2) {
+                            Text("To report inappropriate activity, please contact:")
+                            Text(verbatim: "bones7456+unspoken@gmail.com")
+                        }
+                        .font(.footnote)
+                        .foregroundColor(.white.opacity(0.45))
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 2)
                     }
                     .padding()
                     .frame(minHeight: geometry.size.height)
@@ -270,6 +263,32 @@ struct RoomSelectionView: View {
                 isRoomSelected = true
             }
         }
+    }
+
+    @ViewBuilder
+    private func serverField(icon: String, label: String, placeholder: String,
+                             text: Binding<String>,
+                             keyboard: UIKeyboardType = .default) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.6))
+                .padding(.leading, 32) // align with text field (icon width + spacing)
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .frame(width: 20)
+                    .foregroundColor(.white.opacity(0.7))
+                TextField(placeholder, text: text)
+                    .keyboardType(keyboard)
+                    .foregroundColor(.primary)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 10)
+                    .background(Color.white.opacity(0.9))
+                    .cornerRadius(8)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     private var canJoin: Bool {
