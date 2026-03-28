@@ -823,11 +823,13 @@ extension ChatViewModel: WebSocketDelegate {
                 }
             case "pending_messages":
                 if let msgs = json["messages"] as? [[String: Any]] {
+                    let isoFormatter = ISO8601DateFormatter()
                     for msg in msgs {
                         if let encryptedAESKey = msg["encrypted_aes_key"] as? String,
                            let encryptedContent = msg["encrypted_content"] as? String,
                            let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
-                            self.messages.append(Message(content: decryptedContent, isFromMe: false, isTyping: false))
+                            let timestamp = (msg["timestamp"] as? String).flatMap { isoFormatter.date(from: $0) }
+                            self.messages.append(Message(content: decryptedContent, isFromMe: false, isTyping: false, timestamp: timestamp))
                         }
                     }
                 }
@@ -866,6 +868,7 @@ struct ContentView: View {
     @State private var showUnpinConfirm: Bool = false
     @State private var heartPulse: Bool = false
     @State private var bgHeartScale: CGFloat = 1.0
+    @State private var showTimestamps: Bool = false
     @FocusState private var isTextFieldFocused: Bool
 
     var canSendMessage: Bool {
@@ -1077,9 +1080,9 @@ struct ContentView: View {
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(viewModel.messages) { message in
-                        MessageView(message: message) {
+                        MessageView(message: message, onReport: {
                             viewModel.reportUser()
-                        }
+                        }, showTimestamp: showTimestamps)
                     }
                     if !viewModel.typingContent.isEmpty {
                         MessageView(
@@ -1096,6 +1099,18 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 8)
             }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 20, coordinateSpace: .local)
+                    .onChanged { value in
+                        guard abs(value.translation.height) < abs(value.translation.width) else { return }
+                        if value.translation.width < 0 {
+                            withAnimation(.easeInOut(duration: 0.2)) { showTimestamps = true }
+                        }
+                    }
+                    .onEnded { _ in
+                        withAnimation(.easeInOut(duration: 0.2)) { showTimestamps = false }
+                    }
+            )
             .onChange(of: viewModel.messages.count) { _ in
                 withAnimation {
                     proxy.scrollTo("bottom", anchor: .bottom)
@@ -1212,6 +1227,26 @@ struct ContentView: View {
 struct MessageView: View {
     let message: Message
     let onReport: () -> Void
+    var showTimestamp: Bool = false
+
+    private static let timeOnlyFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    private static let dateTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MM/dd HH:mm"
+        return f
+    }()
+
+    private static func formatTimestamp(_ date: Date) -> String {
+        let elapsed = Date().timeIntervalSince(date)
+        return elapsed < 86400
+            ? timeOnlyFormatter.string(from: date)
+            : dateTimeFormatter.string(from: date)
+    }
 
     var body: some View {
         Group {
@@ -1228,7 +1263,7 @@ struct MessageView: View {
                     Spacer()
                 }
             } else {
-                HStack {
+                HStack(alignment: .bottom, spacing: 6) {
                     if message.isFromMe {
                         Spacer()
                     }
@@ -1248,6 +1283,13 @@ struct MessageView: View {
                         }
                     if !message.isFromMe {
                         Spacer()
+                    }
+                    if showTimestamp, let ts = message.timestamp {
+                        Text(Self.formatTimestamp(ts))
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.6))
+                            .fixedSize()
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
                     }
                 }
             }
@@ -1277,11 +1319,13 @@ struct Message: Identifiable {
     let isFromMe: Bool
     let isTyping: Bool
     let isSystem: Bool
+    let timestamp: Date?
 
-    init(content: String, isFromMe: Bool, isTyping: Bool, isSystem: Bool = false) {
+    init(content: String, isFromMe: Bool, isTyping: Bool, isSystem: Bool = false, timestamp: Date? = nil) {
         self.content = content
         self.isFromMe = isFromMe
         self.isTyping = isTyping
         self.isSystem = isSystem
+        self.timestamp = timestamp
     }
 }

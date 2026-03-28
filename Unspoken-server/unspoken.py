@@ -423,7 +423,8 @@ async def handle_connection(websocket):
                         pending_messages[room_id][queue_key].append({
                             'role': role,
                             'encrypted_aes_key': encrypted_aes_key,
-                            'encrypted_content': encrypted_content
+                            'encrypted_content': encrypted_content,
+                            'timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
                         })
                         save_pending_messages()
                         log_message("SYSTEM", "Server", f"Queued message for offline peer in pinned room {room_id}")
