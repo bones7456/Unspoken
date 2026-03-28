@@ -944,7 +944,7 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     chatHeader
 
-                    chatMessages
+                    ScreenshotProtected { chatMessages }
 
                     inputArea
                 }
@@ -1520,4 +1520,65 @@ private func processImageForSending(_ image: UIImage) -> Data? {
     CGImageDestinationAddImage(dest, cgImage, [kCGImageDestinationLossyCompressionQuality: 0.75] as CFDictionary)
     guard CGImageDestinationFinalize(dest) else { return nil }
     return data as Data
+}
+
+// MARK: - Screenshot Protection
+// UITextField with isSecureTextEntry=true has a system-level CALayer that is
+// excluded from screenshots. Embedding any view inside that layer inherits the
+// same protection — content shows normally on screen but appears blank in screenshots.
+
+fileprivate class SecureContainerView: UIView {
+    private let secureField = UITextField()
+    private weak var embeddedView: UIView?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        secureField.isSecureTextEntry = true
+        secureField.backgroundColor = .clear
+        secureField.isUserInteractionEnabled = false
+        addSubview(secureField)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func embed(_ view: UIView) {
+        embeddedView = view
+        guard let secureLayer = secureField.subviews.first else { return }
+        secureLayer.addSubview(view)
+    }
+
+    // Use layoutSubviews to keep all frames in sync — more reliable than
+    // Auto Layout against UITextField's internal subviews.
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        secureField.frame = bounds
+        guard let secureLayer = secureField.subviews.first else { return }
+        secureLayer.frame = bounds
+        embeddedView?.frame = bounds
+    }
+}
+
+fileprivate struct ScreenshotProtected<Content: View>: UIViewRepresentable {
+    @ViewBuilder let content: () -> Content
+
+    func makeCoordinator() -> Coordinator { Coordinator(content: content()) }
+
+    func makeUIView(context: Context) -> SecureContainerView {
+        let container = SecureContainerView()
+        container.backgroundColor = .clear
+        container.embed(context.coordinator.host.view)
+        return container
+    }
+
+    func updateUIView(_ uiView: SecureContainerView, context: Context) {
+        context.coordinator.host.rootView = content()
+    }
+
+    class Coordinator {
+        let host: UIHostingController<Content>
+        init(content: Content) {
+            host = UIHostingController(rootView: content)
+            host.view.backgroundColor = .clear
+        }
+    }
 }
