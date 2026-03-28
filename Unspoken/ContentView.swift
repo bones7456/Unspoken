@@ -1225,12 +1225,15 @@ struct ContentView: View {
             get: { fullScreenImage.map { IdentifiableImage(image: $0) } },
             set: { fullScreenImage = $0?.image }
         )) { item in
-            ZStack {
-                Color.black.ignoresSafeArea()
-                Image(uiImage: item.image)
-                    .resizable()
-                    .scaledToFit()
+            ScreenshotProtected {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    Image(uiImage: item.image)
+                        .resizable()
+                        .scaledToFit()
+                }
             }
+            .ignoresSafeArea()
         }
     }
 
@@ -1527,15 +1530,23 @@ private func processImageForSending(_ image: UIImage) -> Data? {
 // excluded from screenshots. Embedding any view inside that layer inherits the
 // same protection — content shows normally on screen but appears blank in screenshots.
 
+// Subclass that never becomes first responder, so it won't intercept taps or
+// show a keyboard, while still allowing touches to reach its subviews.
+private final class PassthroughTextField: UITextField {
+    override var canBecomeFirstResponder: Bool { false }
+    override func becomeFirstResponder() -> Bool { false }
+}
+
 fileprivate class SecureContainerView: UIView {
-    private let secureField = UITextField()
+    private let secureField = PassthroughTextField()
     private weak var embeddedView: UIView?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         secureField.isSecureTextEntry = true
         secureField.backgroundColor = .clear
-        secureField.isUserInteractionEnabled = false
+        // isUserInteractionEnabled stays true (default) so touches propagate
+        // to the embedded content inside secureField's subview hierarchy.
         addSubview(secureField)
     }
 
