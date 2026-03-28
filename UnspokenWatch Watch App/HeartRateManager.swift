@@ -14,6 +14,7 @@ class HeartRateManager: NSObject, ObservableObject {
     @Published var isSessionActive = false
 
     private let healthStore = HKHealthStore()
+    private var anchoredQuery: HKAnchoredObjectQuery?
     private var workoutSession: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
 
@@ -33,6 +34,37 @@ class HeartRateManager: NSObject, ObservableObject {
 
     func startSession() {
         guard !isSessionActive else { return }
+        // Always start in query-only mode first — safe, never interferes with existing workouts.
+        // If another app's workout is active, the sensor is already running and we'll get
+        // near-real-time samples via the anchored query within a few seconds.
+        // If no workout is active, the sensor is idle and we'll get no data.
+        // After 10s with no data, escalate to starting our own HKWorkoutSession.
+        startQueryOnlyMode()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self, self.isSessionActive, self.currentBPM == nil, self.workoutSession == nil else { return }
+            if let query = self.anchoredQuery {
+                self.healthStore.stop(query)
+                self.anchoredQuery = nil
+            }
+            self.startWorkoutSessionMode()
+        }
+    }
+
+    private func startQueryOnlyMode() {
+        guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
+        let predicate = HKQuery.predicateForSamples(withStart: Date(), end: nil)
+        let query = HKAnchoredObjectQuery(type: hrType, predicate: predicate, anchor: nil, limit: HKObjectQueryNoLimit) { [weak self] _, samples, _, _, _ in
+            self?.handleSamples(samples)
+        }
+        query.updateHandler = { [weak self] _, samples, _, _, _ in
+            self?.handleSamples(samples)
+        }
+        healthStore.execute(query)
+        self.anchoredQuery = query
+        DispatchQueue.main.async { self.isSessionActive = true }
+    }
+
+    private func startWorkoutSessionMode() {
         let config = HKWorkoutConfiguration()
         config.activityType = .other
         guard let session = try? HKWorkoutSession(healthStore: healthStore, configuration: config) else { return }
@@ -50,14 +82,31 @@ class HeartRateManager: NSObject, ObservableObject {
 
     func stopSession() {
         guard isSessionActive else { return }
-        workoutSession?.end()
-        builder?.endCollection(withEnd: Date()) { [weak self] _, _ in
-            self?.builder?.discardWorkout()
+        if let query = anchoredQuery {
+            healthStore.stop(query)
+            self.anchoredQuery = nil
+        }
+        if workoutSession != nil {
+            workoutSession?.end()
+            builder?.endCollection(withEnd: Date()) { [weak self] _, _ in
+                self?.builder?.discardWorkout()
+            }
+            workoutSession = nil
+            builder = nil
         }
         DispatchQueue.main.async {
             self.isSessionActive = false
             self.currentBPM = nil
         }
+    }
+
+    private func handleSamples(_ samples: [HKSample]?) {
+        guard let sample = samples?.last as? HKQuantitySample else { return }
+        let bpm = Int(sample.quantity.doubleValue(for: HKUnit(from: "count/min")))
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(["bpm": bpm], replyHandler: nil, errorHandler: nil)
+        }
+        DispatchQueue.main.async { self.currentBPM = bpm }
     }
 }
 
