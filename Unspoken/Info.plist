@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera access is used to take photos to share in your private encrypted chat.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Used to start a workout session on Apple Watch to stream your real-time heart rate</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
