@@ -101,7 +101,7 @@ def _format_log_payload(message):
         parts = []
         for k, v in data.items():
             if k in _TRUNCATE_KEYS and isinstance(v, str) and len(v) > _TRUNCATE_LEN:
-                parts.append(f"{k}={v[:_TRUNCATE_LEN]}…")
+                parts.append(f"{k}={v[:_TRUNCATE_LEN]}…({len(v)}B)")
             else:
                 parts.append(f"{k}={json.dumps(v, ensure_ascii=False)}")
         return "{" + ", ".join(parts) + "}"
