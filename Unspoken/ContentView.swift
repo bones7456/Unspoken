@@ -1210,7 +1210,11 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
-        .sheet(isPresented: $showImagePicker) {
+        .sheet(isPresented: $showImagePicker, onDismiss: {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                isTextFieldFocused = true
+            }
+        }) {
             ImagePicker(sourceType: imagePickerSource) { image in
                 selectedImage = image
                 showImagePicker = false
@@ -1469,6 +1473,9 @@ struct ImagePicker: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
         picker.sourceType = sourceType
+        if sourceType == .camera && UIImagePickerController.isCameraDeviceAvailable(.front) {
+            picker.cameraDevice = .front
+        }
         picker.delegate = context.coordinator
         return picker
     }

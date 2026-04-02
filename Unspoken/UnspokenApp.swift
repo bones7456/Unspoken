@@ -167,6 +167,7 @@ struct RoomSelectionView: View {
                             HStack(spacing: 10) {
                                 TextField("Room ID", text: $chatViewModel.roomId)
                                     .keyboardType(.numberPad)
+                                    .foregroundColor(.black)
                                     .padding(.vertical, 12)
                                     .padding(.horizontal, 12)
                                     .background(Color.white.opacity(0.9))
@@ -280,7 +281,7 @@ struct RoomSelectionView: View {
                     .foregroundColor(.white.opacity(0.7))
                 TextField(placeholder, text: text)
                     .keyboardType(keyboard)
-                    .foregroundColor(.primary)
+                    .foregroundColor(.black)
                     .padding(.vertical, 8)
                     .padding(.horizontal, 10)
                     .background(Color.white.opacity(0.9))
