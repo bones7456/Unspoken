@@ -58,6 +58,7 @@ class ChatViewModel: ObservableObject {
     private var pendingAction: (() -> Void)?
     private var wcAdapter: WCAdapter?
     private var heartRateBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var nextSeq: Int = 1
 
     // MARK: - UserDefaults keys for pin persistence
     private let kPinnedRoomId = "pinnedRoomId"
@@ -482,23 +483,26 @@ class ChatViewModel: ObservableObject {
     }
 
     func sendMessage(content: String) {
+        let seq = nextSeq; nextSeq += 1
         let payload = wrapPayload(type: "text", data: content)
         guard let (encryptedAESKey, encryptedContent) = encryptMessage(payload) else { return }
 
-        let message = [
+        let message: [String: Any] = [
             "action": "send_message",
             "room_id": roomId,
             "role": role,
             "encrypted_aes_key": encryptedAESKey,
-            "encrypted_content": encryptedContent
+            "encrypted_content": encryptedContent,
+            "seq": seq
         ]
 
         sendJSON(message)
-        messages.append(Message(content: content, isFromMe: true, isTyping: false))
+        messages.append(Message(content: content, isFromMe: true, isTyping: false, seq: seq))
     }
 
     func sendImage(_ imageData: Data) {
         guard peerPublicKey != nil else { return }
+        let seq = nextSeq; nextSeq += 1
         let base64 = imageData.base64EncodedString()
         let payload = wrapPayload(type: "image", data: base64)
         guard let encrypted = encryptMessage(payload) else { return }
@@ -507,13 +511,11 @@ class ChatViewModel: ObservableObject {
             "room_id": roomId,
             "role": role,
             "encrypted_aes_key": encrypted.0,
-            "encrypted_content": encrypted.1
+            "encrypted_content": encrypted.1,
+            "seq": seq
         ]
-        if let data = try? JSONSerialization.data(withJSONObject: message),
-           let jsonString = String(data: data, encoding: .utf8) {
-            socket?.write(string: jsonString)
-        }
-        self.messages.append(Message(content: "", isFromMe: true, isTyping: false, imageData: imageData))
+        sendJSON(message)
+        self.messages.append(Message(content: "", isFromMe: true, isTyping: false, imageData: imageData, seq: seq))
     }
 
     private func sendJSON(_ dictionary: [String: Any]) {
@@ -757,6 +759,9 @@ extension ChatViewModel: WebSocketDelegate {
                         print("Received and set peer public key")
                         if self.isPinned {
                             self.messages.append(Message(content: "Rejoined pinned room. Encrypted channel restored.", isFromMe: false, isTyping: false, isSystem: true))
+                            if let pendingCount = json["pending_count"] as? Int, pendingCount > 0 {
+                                self.messages.append(Message(content: "\(pendingCount)", isFromMe: false, isTyping: false, isPendingPlaceholder: true))
+                            }
                         } else {
                             self.messages.append(Message(content: "Encrypted channel established, enjoy!", isFromMe: false, isTyping: false, isSystem: true))
                         }
@@ -873,6 +878,7 @@ extension ChatViewModel: WebSocketDelegate {
                 }
             case "pending_messages":
                 if let msgs = json["messages"] as? [[String: Any]] {
+                    self.messages.removeAll { $0.isPendingPlaceholder }
                     let isoFormatter = ISO8601DateFormatter()
                     for msg in msgs {
                         if let encryptedAESKey = msg["encrypted_aes_key"] as? String,
@@ -905,6 +911,11 @@ extension ChatViewModel: WebSocketDelegate {
             case "blocked":
                 if let errorMessage = json["message"] as? String {
                     self.messages.append(Message(content: errorMessage, isFromMe: false, isTyping: false, isSystem: true))
+                }
+            case "ack":
+                if let seq = json["seq"] as? Int,
+                   let idx = self.messages.firstIndex(where: { $0.seq == seq }) {
+                    self.messages[idx].isAcked = true
                 }
             case "login_failed":
                 print("login failed")
@@ -1375,10 +1386,39 @@ struct MessageView: View {
                         .cornerRadius(8)
                     Spacer()
                 }
+            } else if message.isPendingPlaceholder {
+                HStack {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(0.75)
+                            .tint(.white)
+                        let count = Int(message.content) ?? 0
+                        Text(count == 1 ? "1 pending message" : "\(count) pending messages")
+                            .font(.subheadline)
+                            .foregroundColor(.white)
+                    }
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(Color.purple.opacity(0.5))
+                    .cornerRadius(10)
+                    Spacer()
+                }
             } else {
                 HStack(alignment: .bottom, spacing: 6) {
                     if message.isFromMe {
                         Spacer()
+                        if !message.isTyping {
+                            if message.isAcked {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundColor(.blue)
+                            } else {
+                                ProgressView()
+                                    .scaleEffect(0.5)
+                                    .tint(.red)
+                                    .frame(width: 12, height: 12)
+                            }
+                        }
                     }
                     if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
                         Image(uiImage: uiImage)
@@ -1449,16 +1489,22 @@ struct Message: Identifiable {
     let isFromMe: Bool
     let isTyping: Bool
     let isSystem: Bool
+    let isPendingPlaceholder: Bool
     let timestamp: Date?
     let imageData: Data?
+    let seq: Int?
+    var isAcked: Bool
 
-    init(content: String, isFromMe: Bool, isTyping: Bool, isSystem: Bool = false, timestamp: Date? = nil, imageData: Data? = nil) {
+    init(content: String, isFromMe: Bool, isTyping: Bool, isSystem: Bool = false, isPendingPlaceholder: Bool = false, timestamp: Date? = nil, imageData: Data? = nil, seq: Int? = nil, isAcked: Bool = false) {
         self.content = content
         self.isFromMe = isFromMe
         self.isTyping = isTyping
         self.isSystem = isSystem
+        self.isPendingPlaceholder = isPendingPlaceholder
         self.timestamp = timestamp
         self.imageData = imageData
+        self.seq = seq
+        self.isAcked = isAcked
     }
 }
 

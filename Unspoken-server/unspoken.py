@@ -230,6 +230,8 @@ async def handle_connection(websocket):
                         peer_online = peer_user_id in connected_users and rooms[room_id][other_role] is not None
 
                         # Send room_joined to the rejoining user
+                        queue_key_preview = f"for_{rejoin_role}"
+                        pending_count = len(pending_messages.get(room_id, {}).get(queue_key_preview, []))
                         response = json.dumps({
                             'action': 'room_joined',
                             'room_id': room_id,
@@ -238,7 +240,8 @@ async def handle_connection(websocket):
                             'peer_user_id': peer_user_id,
                             'peer_public_key': peer_public_key,
                             'pinned': True,
-                            'peer_status': 'online' if peer_online else 'offline'
+                            'peer_status': 'online' if peer_online else 'offline',
+                            'pending_count': pending_count
                         })
                         await websocket.send(response)
                         log_message("SENT", user_id, response)
@@ -413,6 +416,7 @@ async def handle_connection(websocket):
                         log_message("SENT", other_user_id, notification)
 
             elif action == 'send_message':
+                seq = data.get('seq')
                 room_id = data['room_id']
                 role = data['role']
                 encrypted_aes_key = data['encrypted_aes_key']
@@ -455,6 +459,9 @@ async def handle_connection(websocket):
                             })
                             save_pending_messages()
                             log_message("SYSTEM", "Server", f"Queued message for offline peer in pinned room {room_id}")
+                if seq is not None:
+                    ack = json.dumps({'action': 'ack', 'seq': seq})
+                    await websocket.send(ack)
 
             elif action == 'request_pin':
                 room_id = data['room_id']
