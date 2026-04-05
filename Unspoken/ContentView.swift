@@ -926,22 +926,23 @@ extension ChatViewModel: WebSocketDelegate {
                         self.stopHeartRateMode(notifyPeer: false)
                     }
                 }
-            case "pending_messages":
-                if let msgs = json["messages"] as? [[String: Any]] {
+            case "pending_message":
+                if let encryptedAESKey = json["encrypted_aes_key"] as? String,
+                   let encryptedContent = json["encrypted_content"] as? String,
+                   let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
+                    // Remove placeholder before appending so it stays at the bottom
                     self.messages.removeAll { $0.isPendingPlaceholder }
                     let isoFormatter = ISO8601DateFormatter()
-                    for msg in msgs {
-                        if let encryptedAESKey = msg["encrypted_aes_key"] as? String,
-                           let encryptedContent = msg["encrypted_content"] as? String,
-                           let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
-                            let timestamp = (msg["timestamp"] as? String).flatMap { isoFormatter.date(from: $0) }
-                            let (type, data) = self.unwrapPayload(decryptedContent)
-                            if type == "image", let imgData = Data(base64Encoded: data) {
-                                self.messages.append(Message(content: "", isFromMe: false, isTyping: false, timestamp: timestamp, imageData: imgData))
-                            } else {
-                                self.messages.append(Message(content: data, isFromMe: false, isTyping: false, timestamp: timestamp))
-                            }
-                        }
+                    let timestamp = (json["timestamp"] as? String).flatMap { isoFormatter.date(from: $0) }
+                    let (type, data) = self.unwrapPayload(decryptedContent)
+                    if type == "image", let imgData = Data(base64Encoded: data) {
+                        self.messages.append(Message(content: "", isFromMe: false, isTyping: false, timestamp: timestamp, imageData: imgData))
+                    } else {
+                        self.messages.append(Message(content: data, isFromMe: false, isTyping: false, timestamp: timestamp))
+                    }
+                    // Re-insert placeholder with updated count if more messages are coming
+                    if let remaining = json["pending_count"] as? Int, remaining > 0 {
+                        self.messages.append(Message(content: "\(remaining)", isFromMe: false, isTyping: false, isPendingPlaceholder: true))
                     }
                 }
 

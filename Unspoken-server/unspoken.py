@@ -246,20 +246,25 @@ async def handle_connection(websocket):
                         await websocket.send(response)
                         log_message("SENT", user_id, response)
 
-                        # Deliver pending messages
+                        # Deliver pending messages one by one to avoid oversized frames
                         queue_key = f"for_{rejoin_role}"
                         if room_id in pending_messages and pending_messages[room_id][queue_key]:
                             pending = pending_messages[room_id][queue_key]
-                            if pending:
+                            total = len(pending)
+                            for i, msg in enumerate(pending):
+                                remaining = total - i - 1
                                 notification = json.dumps({
-                                    'action': 'pending_messages',
+                                    'action': 'pending_message',
                                     'room_id': room_id,
-                                    'messages': pending
+                                    'encrypted_aes_key': msg['encrypted_aes_key'],
+                                    'encrypted_content': msg['encrypted_content'],
+                                    'timestamp': msg.get('timestamp'),
+                                    'pending_count': remaining
                                 })
                                 await websocket.send(notification)
-                                log_message("SENT", user_id, f"Delivered {len(pending)} pending messages")
-                                pending_messages[room_id][queue_key] = []
-                                save_pending_messages()
+                            log_message("SENT", user_id, f"Delivered {total} pending messages individually")
+                            pending_messages[room_id][queue_key] = []
+                            save_pending_messages()
 
                         # If peer is online in this room, notify them
                         if peer_online and peer_user_id in connected_users:
