@@ -59,6 +59,10 @@ class ChatViewModel: ObservableObject {
     private var wcAdapter: WCAdapter?
     private var heartRateBackgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var nextSeq: Int = 1
+    private var reconnectTimer: Timer?
+    private var reconnectAttempts: Int = 0
+    private var isUserLeft: Bool = false
+    @Published var isReconnecting: Bool = false
 
     // MARK: - UserDefaults keys for pin persistence
     private let kPinnedRoomId = "pinnedRoomId"
@@ -88,6 +92,10 @@ class ChatViewModel: ObservableObject {
         }
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.endHeartRateBackgroundTask()
+            // Reconnect if we're in a room — the connection may have dropped in background
+            guard let self, self.isChatOpen, !self.isUserLeft else { return }
+            self.reconnectAttempts = 0
+            self.scheduleReconnect()
         }
     }
 
@@ -260,6 +268,9 @@ class ChatViewModel: ObservableObject {
     // MARK: - WebSocket Setup
 
     private func setupWebSocket() {
+        // Detach delegate before disconnecting so the old socket's .disconnected
+        // event doesn't trigger scheduleReconnect() during an intentional reconnect.
+        socket?.delegate = nil
         socket?.disconnect()
 
         let url = URL(string: serverAddress)!
@@ -268,6 +279,19 @@ class ChatViewModel: ObservableObject {
         socket = WebSocket(request: request)
         socket?.delegate = self
         socket?.connect()
+    }
+
+    private func scheduleReconnect() {
+        guard isChatOpen, !isUserLeft else { return }
+        reconnectTimer?.invalidate()
+        let delay = min(pow(2.0, Double(reconnectAttempts)), 15.0) // 1,2,4,8,15s
+        reconnectAttempts = min(reconnectAttempts + 1, 4)
+        isReconnecting = true
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            guard let self, self.isChatOpen, !self.isUserLeft else { return }
+            self.joinRoom()
+            self.setupWebSocket()
+        }
     }
 
     func sendLogin() {
@@ -285,6 +309,8 @@ class ChatViewModel: ObservableObject {
     }
 
     func createRoom() {
+        isUserLeft = false
+        reconnectAttempts = 0
         pendingAction = { [weak self] in
             self?.sendLogin()
             self?.sendJSON(["action": "create_room", "user_id": self?.userId as Any])
@@ -292,6 +318,7 @@ class ChatViewModel: ObservableObject {
     }
 
     func joinRoom() {
+        isUserLeft = false
         pendingAction = { [weak self] in
             self?.sendLogin()
             var msg: [String: Any] = [
@@ -308,6 +335,9 @@ class ChatViewModel: ObservableObject {
     }
 
     func leaveRoom() {
+        isUserLeft = true
+        reconnectTimer?.invalidate()
+        isReconnecting = false
         stopHeartRateMode()
         stopPeerHeartRate()
         if isPinned {
@@ -701,11 +731,18 @@ extension ChatViewModel: WebSocketDelegate {
         case .connected(_):
             print("WebSocket connected")
             DispatchQueue.main.async { [weak self] in
+                self?.reconnectAttempts = 0
+                self?.reconnectTimer?.invalidate()
+                self?.reconnectTimer = nil
+                self?.isReconnecting = false
                 self?.pendingAction?()
                 self?.pendingAction = nil
             }
-        case .disconnected(_, _):
-            print("WebSocket disconnected")
+        case .disconnected(let reason, let code):
+            print("WebSocket disconnected: \(reason) (\(code))")
+            DispatchQueue.main.async { [weak self] in
+                self?.scheduleReconnect()
+            }
         case .text(let string):
             handleMessage(string)
         case .binary(_):
@@ -716,6 +753,9 @@ extension ChatViewModel: WebSocketDelegate {
             break
         case .error(let error):
             print("WebSocket error: \(error?.localizedDescription ?? "Unknown error")")
+            DispatchQueue.main.async { [weak self] in
+                self?.scheduleReconnect()
+            }
         case .viabilityChanged(_):
             break
         case .reconnectSuggested(_):
@@ -723,7 +763,9 @@ extension ChatViewModel: WebSocketDelegate {
         case .cancelled:
             break
         case .peerClosed:
-            break
+            DispatchQueue.main.async { [weak self] in
+                self?.scheduleReconnect()
+            }
         }
     }
 
@@ -1060,9 +1102,15 @@ struct ContentView: View {
                     .font(.caption)
             }
 
-            Text("Room: \(viewModel.roomId)")
-                .font(.headline)
-                .foregroundColor(.white)
+            if viewModel.isReconnecting {
+                Text("Reconnecting...")
+                    .font(.headline)
+                    .foregroundColor(.yellow)
+            } else {
+                Text("Room: \(viewModel.roomId)")
+                    .font(.headline)
+                    .foregroundColor(.white)
+            }
 
             // Online status indicator for pinned rooms
             if viewModel.isPinned {
