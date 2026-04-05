@@ -670,7 +670,7 @@ if __name__ == '__main__':
         mode = "ws" if ssl_context is None else "wss"
         log_message("SYSTEM", "Server", f"Loaded {len(pinned_rooms)} pinned rooms")
         log_message("SYSTEM", "Server", f"Starting server at {mode}://{HOST}:{PORT}")
-        async with websockets.serve(handle_connection, HOST, PORT, ssl=ssl_context):
+        async with websockets.serve(handle_connection, HOST, PORT, ssl=ssl_context, max_size=10*1024*1024):
             await asyncio.Future()  # 运行直到被取消
 
     asyncio.run(main())

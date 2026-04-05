@@ -502,6 +502,14 @@ class ChatViewModel: ObservableObject {
 
     func sendImage(_ imageData: Data) {
         guard peerPublicKey != nil else { return }
+        // After two base64 passes + JSON overhead the wire size is ~1.78x raw.
+        // Server max_size is 10MB, so reject anything that would exceed that.
+        guard imageData.count < 5 * 1024 * 1024 else {
+            DispatchQueue.main.async {
+                self.messages.append(Message(content: "Image too large to send (max ~5 MB).", isFromMe: false, isTyping: false, isSystem: true))
+            }
+            return
+        }
         let seq = nextSeq; nextSeq += 1
         let base64 = imageData.base64EncodedString()
         let payload = wrapPayload(type: "image", data: base64)
@@ -999,6 +1007,48 @@ struct ContentView: View {
         } message: {
             Text(viewModel.heartRateModeError ?? "")
         }
+        .confirmationDialog("Send Image", isPresented: $showImageSourceDialog) {
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button("Take Photo") {
+                    imagePickerSource = .camera
+                    showImagePicker = true
+                }
+            }
+            Button("Choose from Library") {
+                imagePickerSource = .photoLibrary
+                showImagePicker = true
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showImagePicker, onDismiss: {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                isTextFieldFocused = true
+            }
+        }) {
+            ImagePicker(sourceType: imagePickerSource) { image in
+                selectedImage = image
+                showImagePicker = false
+            }
+        }
+        .onChange(of: selectedImage) { image in
+            guard let image, let data = processImageForSending(image) else { return }
+            viewModel.sendImage(data)
+            selectedImage = nil
+        }
+        .sheet(item: Binding(
+            get: { fullScreenImage.map { IdentifiableImage(image: $0) } },
+            set: { fullScreenImage = $0?.image }
+        )) { item in
+            ScreenshotProtected {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    Image(uiImage: item.image)
+                        .resizable()
+                        .scaledToFit()
+                }
+            }
+            .ignoresSafeArea()
+        }
     }
 
     var chatHeader: some View {
@@ -1207,48 +1257,6 @@ struct ContentView: View {
         }
         .onChange(of: viewModel.peerBPM) { newBPM in
             if newBPM == nil { bgHeartScale = 1.0 }
-        }
-        .confirmationDialog("Send Image", isPresented: $showImageSourceDialog) {
-            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                Button("Take Photo") {
-                    imagePickerSource = .camera
-                    showImagePicker = true
-                }
-            }
-            Button("Choose from Library") {
-                imagePickerSource = .photoLibrary
-                showImagePicker = true
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-        .sheet(isPresented: $showImagePicker, onDismiss: {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                isTextFieldFocused = true
-            }
-        }) {
-            ImagePicker(sourceType: imagePickerSource) { image in
-                selectedImage = image
-                showImagePicker = false
-            }
-        }
-        .onChange(of: selectedImage) { image in
-            guard let image, let data = processImageForSending(image) else { return }
-            viewModel.sendImage(data)
-            selectedImage = nil
-        }
-        .sheet(item: Binding(
-            get: { fullScreenImage.map { IdentifiableImage(image: $0) } },
-            set: { fullScreenImage = $0?.image }
-        )) { item in
-            ScreenshotProtected {
-                ZStack {
-                    Color.black.ignoresSafeArea()
-                    Image(uiImage: item.image)
-                        .resizable()
-                        .scaledToFit()
-                }
-            }
-            .ignoresSafeArea()
         }
     }
 
