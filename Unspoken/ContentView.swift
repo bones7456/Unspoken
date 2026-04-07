@@ -62,6 +62,7 @@ class ChatViewModel: ObservableObject {
     private var reconnectTimer: Timer?
     private var reconnectAttempts: Int = 0
     private var isUserLeft: Bool = false
+    private var didEnterBackground: Bool = false
     @Published var isReconnecting: Bool = false
 
     // MARK: - UserDefaults keys for pin persistence
@@ -88,12 +89,14 @@ class ChatViewModel: ObservableObject {
 
     private func setupBackgroundTaskObservers() {
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.didEnterBackground = true
             self?.beginHeartRateBackgroundTaskIfNeeded()
         }
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.endHeartRateBackgroundTask()
-            // Reconnect if we're in a room — the connection may have dropped in background
-            guard let self, self.isChatOpen, !self.isUserLeft else { return }
+            // Only reconnect when returning from background, not on initial launch
+            guard let self, self.isChatOpen, !self.isUserLeft, self.didEnterBackground else { return }
+            self.didEnterBackground = false
             self.reconnectAttempts = 0
             self.scheduleReconnect()
         }
@@ -304,7 +307,8 @@ class ChatViewModel: ObservableObject {
         }
 
         let publicKeyBase64 = publicKeyData.base64EncodedString()
-        let message = ["action": "login", "user_id": userId, "public_key": publicKeyBase64]
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        let message: [String: Any] = ["action": "login", "user_id": userId, "public_key": publicKeyBase64, "client_version": version]
         sendJSON(message)
     }
 
@@ -991,7 +995,7 @@ struct ContentView: View {
     @State private var showImagePicker: Bool = false
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var selectedImage: UIImage? = nil
-    @State private var fullScreenImage: UIImage? = nil
+    @State private var fullScreenImageItem: IdentifiableImage? = nil
 
     var canSendMessage: Bool {
         return viewModel.peerPublicKey != nil
@@ -1078,10 +1082,7 @@ struct ContentView: View {
             viewModel.sendImage(data)
             selectedImage = nil
         }
-        .sheet(item: Binding(
-            get: { fullScreenImage.map { IdentifiableImage(image: $0) } },
-            set: { fullScreenImage = $0?.image }
-        )) { item in
+        .sheet(item: $fullScreenImageItem) { item in
             ScreenshotProtected {
                 ZStack {
                     Color.black.ignoresSafeArea()
@@ -1253,7 +1254,7 @@ struct ContentView: View {
                         MessageView(message: message, onReport: {
                             viewModel.reportUser()
                         }, showTimestamp: showTimestamps, onImageTap: { image in
-                            fullScreenImage = image
+                            fullScreenImageItem = IdentifiableImage(image: image)
                         })
                     }
                     if !viewModel.typingContent.isEmpty {

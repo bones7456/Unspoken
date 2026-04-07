@@ -149,7 +149,8 @@ async def handle_connection(websocket):
                 connected_users[user_id] = websocket
                 public_key_pem = data['public_key']
                 user_public_keys[user_id] = public_key_pem
-                log_message("SYSTEM", "Server", f"User {user_id} logged in with public key")
+                client_version = data.get('client_version', 'unknown')
+                log_message("SYSTEM", "Server", f"User {user_id} logged in (v{client_version})")
 
                 # Notify peers in pinned rooms that this user is online
                 for room_id, pin_info in pinned_rooms.items():
