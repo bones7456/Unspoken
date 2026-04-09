@@ -13,6 +13,9 @@ import HealthKit
 import UIKit
 import WatchConnectivity
 import ImageIO
+import Network
+
+private typealias StarscreamWebSocket = Starscream.WebSocket
 
 class ChatViewModel: ObservableObject {
     @Published var messages: [Message] = []
@@ -37,7 +40,7 @@ class ChatViewModel: ObservableObject {
     @Published var peerLubTick: Int = 0
     @Published var peerDubTick: Int = 0
 
-    private var socket: WebSocket?
+    private var socket: StarscreamWebSocket?
     private var healthStore: HKHealthStore?
     private var heartRateTimer: Timer?
     private var hapticLoopActive = false
@@ -63,6 +66,9 @@ class ChatViewModel: ObservableObject {
     private var reconnectAttempts: Int = 0
     private var isUserLeft: Bool = false
     private var didEnterBackground: Bool = false
+    private var pathMonitor: NWPathMonitor?
+    private var isSocketConnected: Bool = false
+    private var didShowDisconnectMessage: Bool = false  // prevent duplicate "connection lost" messages
     @Published var isReconnecting: Bool = false
 
     // MARK: - UserDefaults keys for pin persistence
@@ -85,6 +91,7 @@ class ChatViewModel: ObservableObject {
         self.serverAddress = "wss://\(serverHost):\(serverPort)"
         setupWatchConnectivity()
         setupBackgroundTaskObservers()
+        setupNetworkMonitor()
     }
 
     private func setupBackgroundTaskObservers() {
@@ -115,6 +122,28 @@ class ChatViewModel: ObservableObject {
         guard heartRateBackgroundTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(heartRateBackgroundTask)
         heartRateBackgroundTask = .invalid
+    }
+
+    private func setupNetworkMonitor() {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                guard let self, self.isChatOpen, !self.isUserLeft else { return }
+                if path.status == .satisfied {
+                    if self.isReconnecting {
+                        // Network recovered while we're in backoff — retry immediately
+                        self.reconnectAttempts = 0
+                        self.scheduleReconnect()
+                    } else if !self.isSocketConnected {
+                        // Network interface changed (e.g. Wi-Fi → cellular) and socket died silently
+                        self.scheduleReconnect()
+                    }
+                }
+                // path unsatisfied: .viabilityChanged(false) or .disconnected will handle it
+            }
+        }
+        monitor.start(queue: .global(qos: .utility))
+        pathMonitor = monitor
     }
 
     private func setupWatchConnectivity() {
@@ -279,13 +308,18 @@ class ChatViewModel: ObservableObject {
         let url = URL(string: serverAddress)!
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
-        socket = WebSocket(request: request)
+        socket = StarscreamWebSocket(request: request)
         socket?.delegate = self
         socket?.connect()
     }
 
     private func scheduleReconnect() {
         guard isChatOpen, !isUserLeft else { return }
+        // Show "connection lost" system message only on the first call per disconnection event
+        if !isReconnecting && !didShowDisconnectMessage {
+            didShowDisconnectMessage = true
+            addSystemMessage("Connection lost. Reconnecting...")
+        }
         reconnectTimer?.invalidate()
         let delay = min(pow(2.0, Double(reconnectAttempts)), 15.0) // 1,2,4,8,15s
         reconnectAttempts = min(reconnectAttempts + 1, 4)
@@ -294,6 +328,45 @@ class ChatViewModel: ObservableObject {
             guard let self, self.isChatOpen, !self.isUserLeft else { return }
             self.joinRoom()
             self.setupWebSocket()
+        }
+    }
+
+    private func addSystemMessage(_ text: String) {
+        messages.append(Message(content: text, isFromMe: false, isTyping: false, isSystem: true))
+    }
+
+    private func retryPendingMessages() {
+        let pending = messages.filter {
+            $0.isFromMe && !$0.isAcked && !$0.isSystem && !$0.isTyping && !$0.isPendingPlaceholder && $0.seq != nil
+        }
+        guard !pending.isEmpty, peerPublicKey != nil else { return }
+        for msg in pending {
+            if let imageData = msg.imageData {
+                let base64 = imageData.base64EncodedString()
+                let payload = wrapPayload(type: "image", data: base64)
+                guard let encrypted = encryptMessage(payload) else { continue }
+                let json: [String: Any] = [
+                    "action": "send_message",
+                    "room_id": roomId,
+                    "role": role,
+                    "encrypted_aes_key": encrypted.0,
+                    "encrypted_content": encrypted.1,
+                    "seq": msg.seq!
+                ]
+                sendJSON(json)
+            } else {
+                let payload = wrapPayload(type: "text", data: msg.content)
+                guard let (encryptedAESKey, encryptedContent) = encryptMessage(payload) else { continue }
+                let json: [String: Any] = [
+                    "action": "send_message",
+                    "room_id": roomId,
+                    "role": role,
+                    "encrypted_aes_key": encryptedAESKey,
+                    "encrypted_content": encryptedContent,
+                    "seq": msg.seq!
+                ]
+                sendJSON(json)
+            }
         }
     }
 
@@ -735,6 +808,7 @@ extension ChatViewModel: WebSocketDelegate {
         case .connected(_):
             print("WebSocket connected")
             DispatchQueue.main.async { [weak self] in
+                self?.isSocketConnected = true
                 self?.reconnectAttempts = 0
                 self?.reconnectTimer?.invalidate()
                 self?.reconnectTimer = nil
@@ -745,6 +819,7 @@ extension ChatViewModel: WebSocketDelegate {
         case .disconnected(let reason, let code):
             print("WebSocket disconnected: \(reason) (\(code))")
             DispatchQueue.main.async { [weak self] in
+                self?.isSocketConnected = false
                 self?.scheduleReconnect()
             }
         case .text(let string):
@@ -758,16 +833,33 @@ extension ChatViewModel: WebSocketDelegate {
         case .error(let error):
             print("WebSocket error: \(error?.localizedDescription ?? "Unknown error")")
             DispatchQueue.main.async { [weak self] in
+                self?.isSocketConnected = false
                 self?.scheduleReconnect()
             }
-        case .viabilityChanged(_):
-            break
+        case .viabilityChanged(let isViable):
+            if !isViable {
+                // Network path died — trigger reconnect immediately
+                DispatchQueue.main.async { [weak self] in
+                    self?.isSocketConnected = false
+                    self?.scheduleReconnect()
+                }
+            } else {
+                // Network recovered — if already reconnecting, reset backoff and retry now
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isReconnecting else { return }
+                    self.reconnectAttempts = 0
+                    self.scheduleReconnect()
+                }
+            }
         case .reconnectSuggested(_):
             break
         case .cancelled:
-            break
+            DispatchQueue.main.async { [weak self] in
+                self?.isSocketConnected = false
+            }
         case .peerClosed:
             DispatchQueue.main.async { [weak self] in
+                self?.isSocketConnected = false
                 self?.scheduleReconnect()
             }
         }
@@ -786,6 +878,11 @@ extension ChatViewModel: WebSocketDelegate {
                    let role = json["role"] as? String {
                     self.roomId = roomId
                     self.role = role
+                    // Show "Reconnected" if this room_joined is the result of an auto-reconnect
+                    if self.didShowDisconnectMessage {
+                        self.addSystemMessage("Reconnected")
+                        self.didShowDisconnectMessage = false
+                    }
                     self.isChatOpen = true
                 }
                 // Read pinned/peer_status fields
@@ -819,6 +916,7 @@ extension ChatViewModel: WebSocketDelegate {
                         } else {
                             self.messages.append(Message(content: "Encrypted channel established, enjoy!", isFromMe: false, isTyping: false, isSystem: true))
                         }
+                        self.retryPendingMessages()
                     } else {
                         print("Failed to create peer public key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
                     }
@@ -838,6 +936,7 @@ extension ChatViewModel: WebSocketDelegate {
                         self.peerIsOnline = true
                         print("Received and set peer public key")
                         self.messages.append(Message(content: "\(peerRole.capitalized) joined, Encrypted channel established, enjoy!", isFromMe: false, isTyping: false, isSystem: true))
+                        self.retryPendingMessages()
                     } else {
                         print("Failed to create peer public key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown error")")
                     }
@@ -1082,14 +1181,18 @@ struct ContentView: View {
             }
         }
         .onChange(of: selectedImage) { image in
-            guard let image, let data = processImageForSending(image) else { return }
-            viewModel.sendImage(data)
+            guard let image else { return }
             selectedImage = nil
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard let data = processImageForSending(image) else { return }
+                DispatchQueue.main.async { viewModel.sendImage(data) }
+            }
         }
         .sheet(isPresented: $showMemeSearch) {
             MemeSearchView { image in
-                if let data = processImageForSending(image) {
-                    viewModel.sendImage(data)
+                DispatchQueue.global(qos: .userInitiated).async {
+                    guard let data = processImageForSending(image) else { return }
+                    DispatchQueue.main.async { viewModel.sendImage(data) }
                 }
             }
         }
@@ -1662,6 +1765,7 @@ private final class PassthroughTextField: UITextField {
 fileprivate class SecureContainerView: UIView {
     private let secureField = PassthroughTextField()
     private weak var embeddedView: UIView?
+    weak var hostingController: UIViewController?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1689,6 +1793,30 @@ fileprivate class SecureContainerView: UIView {
         secureLayer.frame = bounds
         embeddedView?.frame = bounds
     }
+
+    // Properly add UIHostingController as child VC to avoid layout loops
+    // and responder chain breakage.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, let hc = hostingController, hc.parent == nil else { return }
+        var responder: UIResponder? = next
+        while let r = responder {
+            if let vc = r as? UIViewController {
+                vc.addChild(hc)
+                hc.didMove(toParent: vc)
+                return
+            }
+            responder = r.next
+        }
+    }
+
+    override func willMove(toWindow newWindow: UIWindow?) {
+        if newWindow == nil, let hc = hostingController, hc.parent != nil {
+            hc.willMove(toParent: nil)
+            hc.removeFromParent()
+        }
+        super.willMove(toWindow: newWindow)
+    }
 }
 
 fileprivate struct ScreenshotProtected<Content: View>: UIViewRepresentable {
@@ -1700,6 +1828,7 @@ fileprivate struct ScreenshotProtected<Content: View>: UIViewRepresentable {
         let container = SecureContainerView()
         container.backgroundColor = .clear
         container.embed(context.coordinator.host.view)
+        container.hostingController = context.coordinator.host
         return container
     }
 
@@ -1895,13 +2024,17 @@ private struct MemeSearchView: View {
         guard let url = URL(string: item.contentURL) else { return }
         isSending = true
         URLSession.shared.dataTask(with: url) { data, _, _ in
+            guard let data, let image = UIImage(data: data) else {
+                DispatchQueue.main.async {
+                    isSending = false
+                    errorMessage = "Failed to load image"
+                }
+                return
+            }
+            // processImageForSending (HEIC encoding) stays on background thread
+            onSend(image)
             DispatchQueue.main.async {
                 isSending = false
-                guard let data, let image = UIImage(data: data) else {
-                    errorMessage = "Failed to load image"
-                    return
-                }
-                onSend(image)
                 dismiss()
             }
         }.resume()
