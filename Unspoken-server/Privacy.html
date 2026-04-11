@@ -3,127 +3,177 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unspoken - Privacy Policy and Terms of Use</title>
+    <title>Unspoken - Privacy Policy</title>
     <style>
+        :root {
+            --gradient-start: rgba(0, 122, 255, 0.8);
+            --gradient-end: rgba(128, 0, 128, 0.8);
+            --text-color: #ffffff;
+            --secondary-text-color: #f0f0f0;
+            --card-bg: rgba(255, 255, 255, 0.1);
+        }
+        * { box-sizing: border-box; }
         body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
+            line-height: 1.7;
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            background-attachment: fixed;
+            min-height: 100vh;
+        }
+        .container {
             max-width: 800px;
             margin: 0 auto;
-            padding: 20px;
+            padding: 48px 24px;
         }
-        h1, h2 {
-            color: #2c3e50;
+        h1 {
+            font-size: 40px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin: 0 0 8px;
+        }
+        .meta {
+            font-size: 14px;
+            color: rgba(255,255,255,0.6);
+            margin-bottom: 40px;
+        }
+        h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin: 0 0 12px;
+            color: var(--text-color);
         }
         .section {
-            margin-bottom: 20px;
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 24px 28px;
+            margin-bottom: 16px;
         }
+        p { margin: 0 0 12px; color: var(--secondary-text-color); }
+        p:last-child { margin-bottom: 0; }
+        ul { margin: 8px 0 12px; padding-left: 20px; color: var(--secondary-text-color); }
+        li { margin-bottom: 6px; }
+        a { color: rgba(255,255,255,0.8); }
+        footer {
+            text-align: center;
+            padding: 24px 0;
+            font-size: 13px;
+            color: rgba(255,255,255,0.5);
+        }
+        footer a { color: rgba(255,255,255,0.6); text-decoration: none; }
+        footer a:hover { color: #fff; }
+        footer .divider { margin: 0 8px; }
     </style>
 </head>
 <body>
-    <h1>Unspoken Privacy Policy and Terms of Use</h1>
-    <p>Last updated: 2024 Aug 18</p>
+    <div class="container">
+        <h1>Privacy Policy</h1>
+        <p class="meta">Last updated: April 11, 2026</p>
 
-    <div class="section">
-        <h2>1. Introduction</h2>
-        <p>Welcome to Unspoken ("we," "our," or "us"). This document outlines our Privacy Policy and Terms of Use. By using Unspoken, you agree to these terms and policies.</p>
+        <div class="section">
+            <h2>1. Introduction</h2>
+            <p>Welcome to Unspoken ("we," "our," or "us"). Unspoken is an end-to-end encrypted anonymous chat application. This Privacy Policy explains what information we handle, how we handle it, and your rights. By using Unspoken, you agree to this policy.</p>
+        </div>
+
+        <div class="section">
+            <h2>2. Age Restriction</h2>
+            <p>Unspoken is intended for users aged 17 and older. By using this app, you confirm that you are at least 17 years old.</p>
+        </div>
+
+        <div class="section">
+            <h2>3. No Account Required</h2>
+            <p>Unspoken does not require registration. There is no account, no username, no email address, and no phone number associated with your use of the app. Each session uses an anonymous, randomly generated identifier.</p>
+        </div>
+
+        <div class="section">
+            <h2>4. Information We Do Not Collect</h2>
+            <p>Because all messages are end-to-end encrypted, we cannot access the content of your conversations. Specifically:</p>
+            <ul>
+                <li>We do not collect your name, email, phone number, or any personal identifier</li>
+                <li>We do not store or read the content of your messages, images, or typing activity</li>
+                <li>We do not collect location data</li>
+                <li>We do not track usage analytics or build behavioral profiles</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>5. Information We Do Handle</h2>
+            <p>To provide the service, our server handles the following in a minimal and transient way:</p>
+            <ul>
+                <li><strong>Encrypted message payloads</strong> — relayed between peers in real time; never stored in readable form. For pinned rooms, encrypted messages may be queued temporarily on the server while a peer is offline, and are deleted once delivered and acknowledged.</li>
+                <li><strong>Public keys</strong> — stored per pinned room to enable rejoining with the same encryption keys. Cleared when a room is unpinned.</li>
+                <li><strong>Anonymous session IDs</strong> — randomly generated per session, not linked to any personal identity.</li>
+                <li><strong>Server logs</strong> — standard connection logs (IP address, timestamps) for security and operational purposes. Retained for a limited period.</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>6. Third-Party Services</h2>
+            <p>Unspoken does not use any third-party analytics, advertising, or crash reporting SDKs. No data is shared with or transmitted to any third-party service. We do not sell personal data — there is no personal data to sell.</p>
+        </div>
+
+        <div class="section">
+            <h2>7. Health Data</h2>
+            <p>If you use the heart rate sharing feature, your Apple Watch reads heart rate data via HealthKit. This data is transmitted in real time directly to your conversation peer, end-to-end encrypted. It is not stored on our servers.</p>
+            <p>HealthKit data is never used for advertising or shared with third parties.</p>
+        </div>
+
+        <div class="section">
+            <h2>8. User Generated Content and Code of Conduct</h2>
+            <p>Unspoken has zero tolerance for objectionable content or abusive behavior. Users are prohibited from sending content that is illegal, harmful, threatening, abusive, harassing, defamatory, obscene, or otherwise objectionable.</p>
+            <p>We reserve the right to block users who violate these terms.</p>
+        </div>
+
+        <div class="section">
+            <h2>9. Content Moderation</h2>
+            <p>Unspoken implements the following measures to maintain a safe environment:</p>
+            <ul>
+                <li>User reporting mechanism to flag abusive users</li>
+                <li>User blocking to prevent interactions with reported users</li>
+                <li>Blocked users are prevented from using the service</li>
+                <li>We aim to review reports within 24 hours</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>10. Data Security</h2>
+            <p>All communications between the app and server use TLS encryption in transit. Message content is additionally protected by end-to-end encryption (RSA-2048 + AES-256-GCM), meaning even we cannot read what you send.</p>
+            <p>The server source code is publicly available for independent security review at <a href="https://github.com/bones7456/Unspoken">github.com/bones7456/Unspoken</a>.</p>
+        </div>
+
+        <div class="section">
+            <h2>11. Pricing</h2>
+            <p>The Unspoken iOS app is available as a one-time purchase on the App Store. There are no subscriptions or in-app purchases. If you prefer, you can build and host the app yourself using the open-source code at no cost.</p>
+        </div>
+
+        <div class="section">
+            <h2>12. Your Rights</h2>
+            <p>Because we do not collect personal data tied to your identity, there is generally no personal data to access, correct, or delete. If you have concerns about data related to your IP address in server logs, or wish to request deletion, please contact us.</p>
+        </div>
+
+        <div class="section">
+            <h2>13. Changes to This Policy</h2>
+            <p>We may update this Privacy Policy from time to time. Changes will be posted on this page with an updated date. Continued use of the app after changes constitutes acceptance of the revised policy.</p>
+        </div>
+
+        <div class="section">
+            <h2>14. Contact</h2>
+            <p>For privacy questions, to report inappropriate activity, or for support:</p>
+            <p>Email: <a href="mailto:bones7456+unspoken@gmail.com">bones7456+unspoken@gmail.com</a></p>
+        </div>
     </div>
 
-    <div class="section">
-        <h2>2. Age Restriction</h2>
-        <p>Unspoken is intended for users aged 17 and older. By using this app, you confirm that you are at least 17 years old.</p>
-    </div>
-
-    <div class="section">
-        <h2>3. User Generated Content and Code of Conduct</h2>
-        <p>Unspoken has zero tolerance for objectionable content or abusive users. Users are prohibited from posting any content that is illegal, harmful, threatening, abusive, harassing, defamatory, vulgar, obscene, or otherwise objectionable.</p>
-        <p>We reserve the right to remove any content and terminate the account of any user violating these terms.</p>
-    </div>
-
-    <div class="section">
-        <h2>4. Content Moderation</h2>
-        <p>Unspoken implements the following measures to maintain a safe environment:</p>
-        <ul>
-            <li>Content filtering system to automatically detect and remove objectionable content</li>
-            <li>User reporting mechanism to flag inappropriate content or abusive users</li>
-            <li>User blocking feature to prevent interactions with abusive users</li>
-            <li>Immediate post removal option for users</li>
-            <li>24-hour response time to address reported content, including content removal and user bans when necessary</li>
-        </ul>
-    </div>
-
-    <div class="section">
-        <h2>5. Information We Collect</h2>
-        <p>We collect the following types of information:</p>
-        <ul>
-            <li>Personal Information: Such as your name, email address, and phone number when you create an account.</li>
-            <li>Usage Data: Information on how you use the app, including chat logs and typing patterns.</li>
-            <li>Device Information: Including device type, operating system, and unique device identifiers.</li>
-        </ul>
-    </div>
-
-    <div class="section">
-        <h2>6. How We Use Your Information</h2>
-        <p>We use the collected information for various purposes, including:</p>
-        <ul>
-            <li>Providing and maintaining our service</li>
-            <li>Notifying you about changes to our service</li>
-            <li>Allowing you to participate in interactive features of our app</li>
-            <li>Providing customer support</li>
-            <li>Gathering analysis to improve our service</li>
-            <li>Monitoring the usage of our service</li>
-            <li>Detecting, preventing, and addressing technical issues and abusive behavior</li>
-        </ul>
-    </div>
-
-    <div class="section">
-        <h2>7. Data Sharing and Disclosure</h2>
-        <p>We may share your information with:</p>
-        <ul>
-            <li>Service providers who assist us in operating our app</li>
-            <li>Law enforcement agencies, public authorities or other judicial bodies and organizations when we are legally required to do so</li>
-            <li>Third parties, in the event of a reorganization, merger, sale, joint venture, or other business transaction</li>
-        </ul>
-    </div>
-
-    <div class="section">
-        <h2>8. Data Security</h2>
-        <p>We implement appropriate technical and organizational measures to protect your personal data against accidental or unlawful destruction, loss, alteration, and unauthorized disclosure or access.</p>
-    </div>
-
-    <div class="section">
-        <h2>9. Your Rights</h2>
-        <p>You have the right to:</p>
-        <ul>
-            <li>Access and receive a copy of your data</li>
-            <li>Rectify your personal information</li>
-            <li>Request erasure of your personal data</li>
-            <li>Object to processing of your personal data</li>
-            <li>Request restriction of processing your personal data</li>
-            <li>Data portability</li>
-        </ul>
-    </div>
-
-    <div class="section">
-        <h2>10. Account Creation and Accessibility</h2>
-        <p>Unspoken is available to the general public. Any individual can create an account by downloading the app and following the registration process. There are no restrictions based on company affiliation or specific group membership.</p>
-    </div>
-
-    <div class="section">
-        <h2>11. Pricing and Payments</h2>
-        <p>Unspoken is free to download and use. Currently, there are no paid features or in-app purchases. If this changes in the future, we will update this policy and notify users accordingly.</p>
-    </div>
-
-    <div class="section">
-        <h2>12. Changes to This Policy</h2>
-        <p>We may update our Privacy Policy and Terms of Use from time to time. We will notify you of any changes by posting the new policy on this page and updating the "Last updated" date.</p>
-    </div>
-
-    <div class="section">
-        <h2>13. Contact Us</h2>
-        <p>If you have any questions about this policy, need to report inappropriate activity, or require support, please contact us at:</p>
-        <p>Email: bones7456+unspoken@gmail.com</p>
-    </div>
+    <footer>
+        <div class="container" style="padding-top: 0; padding-bottom: 0;">
+            <a href="index.html">Home</a>
+            <span class="divider">·</span>
+            <a href="EULA.html">Terms of Use</a>
+            <span class="divider">·</span>
+            <a href="support.html">Support</a>
+        </div>
+    </footer>
 </body>
-</html>`
+</html>

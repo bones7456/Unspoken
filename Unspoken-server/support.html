@@ -10,114 +10,126 @@
             --gradient-end: rgba(128, 0, 128, 0.8);
             --text-color: #ffffff;
             --secondary-text-color: #f0f0f0;
+            --card-bg: rgba(255, 255, 255, 0.1);
         }
-        
+        * { box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
-            line-height: 1.6;
+            line-height: 1.7;
             color: var(--text-color);
             margin: 0;
             padding: 0;
-            background: linear-gradient(to bottom right, var(--gradient-start), var(--gradient-end));
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
             background-attachment: fixed;
             min-height: 100vh;
         }
-        
         .container {
             max-width: 800px;
             margin: 0 auto;
-            padding: 40px 20px;
+            padding: 48px 24px;
         }
-        
-        h1, h2 {
-            color: var(--text-color);
+        h1 {
+            font-size: 40px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin: 0 0 8px;
         }
-        
+        .subtitle {
+            font-size: 18px;
+            color: var(--secondary-text-color);
+            margin-bottom: 40px;
+        }
+        h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin: 0 0 12px;
+        }
         .section {
-            background-color: rgba(255, 255, 255, 0.1);
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
+            background: var(--card-bg);
             backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 24px 28px;
+            margin-bottom: 16px;
         }
-        
+        p { margin: 0 0 12px; color: var(--secondary-text-color); }
+        p:last-child { margin-bottom: 0; }
+        ul { margin: 8px 0 0; padding-left: 20px; color: var(--secondary-text-color); }
+        li { margin-bottom: 6px; }
+        a { color: rgba(255,255,255,0.8); }
         .contact-button {
             display: inline-block;
-            background-color: #0a84ff;
+            background: #0a84ff;
             color: white;
             padding: 12px 24px;
             text-decoration: none;
-            border-radius: 25px;
-            margin-top: 10px;
+            border-radius: 980px;
             font-weight: 500;
+            font-size: 15px;
+            margin-top: 12px;
+            transition: background 0.2s;
         }
-        
-        .contact-button:hover {
-            background-color: #0066cc;
+        .contact-button:hover { background: #0066cc; }
+        footer {
+            text-align: center;
+            padding: 24px 0;
+            font-size: 13px;
+            color: rgba(255,255,255,0.5);
         }
-        
-        ul {
-            list-style-type: none;
-            padding: 0;
-        }
-        
-        li {
-            margin-bottom: 10px;
-            padding-left: 20px;
-            position: relative;
-        }
-        
-        li:before {
-            content: "•";
-            position: absolute;
-            left: 0;
-        }
+        footer a { color: rgba(255,255,255,0.6); text-decoration: none; }
+        footer a:hover { color: #fff; }
+        footer .divider { margin: 0 8px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Unspoken Support</h1>
-
-        <div class="section">
-            <h2>Need Help?</h2>
-            <p>We're here to assist you with any questions or issues you might have with Unspoken. Our support team is ready to help you with:</p>
-            <ul>
-                <li>Technical difficulties</li>
-                <li>Account-related issues</li>
-                <li>Feature requests</li>
-                <li>Bug reports</li>
-                <li>Privacy concerns</li>
-                <li>Content moderation</li>
-            </ul>
-        </div>
+        <h1>Support</h1>
+        <p class="subtitle">We're here to help with any questions or issues.</p>
 
         <div class="section">
             <h2>Contact Support</h2>
-            <p>For the fastest response, please email us at:</p>
+            <p>For the fastest response, email us at:</p>
             <a href="mailto:bones7456+unspoken@gmail.com" class="contact-button">bones7456+unspoken@gmail.com</a>
-            <p>When contacting support, please include:</p>
+            <p style="margin-top: 16px;">We aim to respond within 3 working days. For urgent safety or security matters, we prioritize response time.</p>
+            <p>When contacting support, please include your device model, iOS version, app version, and a clear description of the issue.</p>
+        </div>
+
+        <div class="section">
+            <h2>Common Topics</h2>
             <ul>
-                <li>Your device model</li>
-                <li>iOS version</li>
-                <li>App version</li>
-                <li>Clear description of the issue</li>
-                <li>Steps to reproduce the problem (if applicable)</li>
-                <li>Screenshots (if relevant)</li>
+                <li>Connection issues or reconnect problems</li>
+                <li>Pinned room not persisting across restarts</li>
+                <li>Heart rate sharing not working (requires Apple Watch)</li>
+                <li>Image or meme sending issues</li>
+                <li>Reporting an abusive user</li>
+                <li>Feature requests or feedback</li>
+                <li>Self-hosting the server</li>
             </ul>
         </div>
 
         <div class="section">
-            <h2>Response Time</h2>
-            <p>We strive to respond to all support inquiries within 3 working days. For urgent matters related to safety or security, we prioritize response times.</p>
+            <h2>Self-hosting &amp; Open Source</h2>
+            <p>Unspoken is MIT licensed and fully open source. If you'd like to run your own server, browse the source code, or report a bug:</p>
+            <p><a href="https://github.com/bones7456/Unspoken">github.com/bones7456/Unspoken</a></p>
         </div>
 
         <div class="section">
             <h2>Additional Resources</h2>
             <ul>
-                <li><a href="Privacy.html" style="color: var(--text-color);">Privacy Policy</a></li>
-                <li><a href="index.html" style="color: var(--text-color);">About Unspoken</a></li>
+                <li><a href="Privacy.html">Privacy Policy</a></li>
+                <li><a href="EULA.html">Terms of Use</a></li>
+                <li><a href="index.html">About Unspoken</a></li>
             </ul>
         </div>
     </div>
+
+    <footer>
+        <div class="container" style="padding-top: 0; padding-bottom: 0;">
+            <a href="index.html">Home</a>
+            <span class="divider">·</span>
+            <a href="Privacy.html">Privacy Policy</a>
+            <span class="divider">·</span>
+            <a href="EULA.html">Terms of Use</a>
+        </div>
+    </footer>
 </body>
 </html>
