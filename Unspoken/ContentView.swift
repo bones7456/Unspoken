@@ -1047,6 +1047,16 @@ extension ChatViewModel: WebSocketDelegate {
                     if let remaining = json["pending_count"] as? Int, remaining > 0 {
                         self.messages.append(Message(content: "\(remaining)", isFromMe: false, isTyping: false, isPendingPlaceholder: true))
                     }
+                    // Ack so server can delete this message from the persistent queue
+                    if let pendingMsgId = json["pending_msg_id"] {
+                        let ack: [String: Any] = [
+                            "action": "pending_ack",
+                            "room_id": self.roomId,
+                            "role": self.role,
+                            "pending_msg_id": pendingMsgId
+                        ]
+                        self.sendJSON(ack)
+                    }
                 }
 
             case "error":

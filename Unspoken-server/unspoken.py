@@ -89,7 +89,17 @@ def restore_pinned_rooms():
     # Also ensure pending_messages has entries for all pinned rooms
     for room_id in pinned_rooms:
         if room_id not in pending_messages:
-            pending_messages[room_id] = {"for_host": [], "for_guest": []}
+            pending_messages[room_id] = {"for_host": [], "for_guest": [], "next_id": 0}
+        # Migrate existing messages that predate pending_msg_id
+        entry = pending_messages[room_id]
+        if "next_id" not in entry:
+            entry["next_id"] = 0
+        for queue_key in ("for_host", "for_guest"):
+            for msg in entry.get(queue_key, []):
+                if "pending_msg_id" not in msg:
+                    msg["pending_msg_id"] = entry["next_id"]
+                    entry["next_id"] += 1
+    save_pending_messages()
 
 _TRUNCATE_KEYS = {"encrypted_content", "encrypted_aes_key", "public_key", "peer_public_key", "host_public_key", "guest_public_key"}
 _TRUNCATE_LEN = 16
@@ -257,15 +267,14 @@ async def handle_connection(websocket):
                                 notification = json.dumps({
                                     'action': 'pending_message',
                                     'room_id': room_id,
+                                    'pending_msg_id': msg['pending_msg_id'],
                                     'encrypted_aes_key': msg['encrypted_aes_key'],
                                     'encrypted_content': msg['encrypted_content'],
                                     'timestamp': msg.get('timestamp'),
                                     'pending_count': remaining
                                 })
                                 await websocket.send(notification)
-                            log_message("SENT", user_id, f"Delivered {total} pending messages individually")
-                            pending_messages[room_id][queue_key] = []
-                            save_pending_messages()
+                            log_message("SENT", user_id, f"Delivered {total} pending messages, awaiting acks")
 
                         # If peer is online in this room, notify them
                         if peer_online and peer_user_id in connected_users:
@@ -456,8 +465,11 @@ async def handle_connection(websocket):
                         else:
                             queue_key = f"for_{other_role}"
                             if room_id not in pending_messages:
-                                pending_messages[room_id] = {"for_host": [], "for_guest": []}
+                                pending_messages[room_id] = {"for_host": [], "for_guest": [], "next_id": 0}
+                            msg_id = pending_messages[room_id].get("next_id", 0)
+                            pending_messages[room_id]["next_id"] = msg_id + 1
                             pending_messages[room_id][queue_key].append({
+                                'pending_msg_id': msg_id,
                                 'role': role,
                                 'encrypted_aes_key': encrypted_aes_key,
                                 'encrypted_content': encrypted_content,
@@ -500,7 +512,7 @@ async def handle_connection(websocket):
                         }
                         room['pinned'] = True
                         # Init pending message queues
-                        pending_messages[room_id] = {"for_host": [], "for_guest": []}
+                        pending_messages[room_id] = {"for_host": [], "for_guest": [], "next_id": 0}
                         save_pinned_rooms()
                         save_pending_messages()
                         log_message("SYSTEM", "Server", f"Room {room_id} pinned")
@@ -563,6 +575,21 @@ async def handle_connection(websocket):
                     save_pinned_rooms()
                     save_pending_messages()
                     log_message("SYSTEM", "Server", f"Room {room_id} unpinned")
+
+            elif action == 'pending_ack':
+                room_id = data['room_id']
+                role = data['role']
+                pending_msg_id = data['pending_msg_id']
+                queue_key = f"for_{role}"
+                if room_id in pending_messages and queue_key in pending_messages[room_id]:
+                    before = len(pending_messages[room_id][queue_key])
+                    pending_messages[room_id][queue_key] = [
+                        m for m in pending_messages[room_id][queue_key]
+                        if m['pending_msg_id'] != pending_msg_id
+                    ]
+                    if len(pending_messages[room_id][queue_key]) < before:
+                        save_pending_messages()
+                        log_message("SYSTEM", "Server", f"Deleted pending msg {pending_msg_id} for {role} in room {room_id}")
 
             elif action == 'report_user':
                 await handle_report_user(websocket, data)
