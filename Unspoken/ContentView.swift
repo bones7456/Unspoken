@@ -331,6 +331,18 @@ class ChatViewModel: ObservableObject {
         }
     }
 
+    // Build a QuoteContent from the message being quoted.
+    // Only uses the top-level content (ignores any nested quote) to prevent nesting.
+    private func makeQuoteContent(from msg: Message) -> QuoteContent? {
+        if let imgData = msg.imageData {
+            let thumb = makeQuoteThumbnail(imgData) ?? imgData
+            return .image(thumb)
+        } else if !msg.content.isEmpty {
+            return .text(String(msg.content.prefix(80)))
+        }
+        return nil
+    }
+
     private func addSystemMessage(_ text: String) {
         messages.append(Message(content: text, isFromMe: false, isTyping: false, isSystem: true))
     }
@@ -343,7 +355,7 @@ class ChatViewModel: ObservableObject {
         for msg in pending {
             if let imageData = msg.imageData {
                 let base64 = imageData.base64EncodedString()
-                let payload = wrapPayload(type: "image", data: base64)
+                let payload = wrapPayload(type: "image", data: base64, quote: msg.quote)
                 guard let encrypted = encryptMessage(payload) else { continue }
                 let json: [String: Any] = [
                     "action": "send_message",
@@ -355,7 +367,7 @@ class ChatViewModel: ObservableObject {
                 ]
                 sendJSON(json)
             } else {
-                let payload = wrapPayload(type: "text", data: msg.content)
+                let payload = wrapPayload(type: "text", data: msg.content, quote: msg.quote)
                 guard let (encryptedAESKey, encryptedContent) = encryptMessage(payload) else { continue }
                 let json: [String: Any] = [
                     "action": "send_message",
@@ -573,25 +585,29 @@ class ChatViewModel: ObservableObject {
         sendJSON(message)
     }
 
-    private func wrapPayload(type: String, data: String) -> String {
-        let obj: [String: String] = ["type": type, "data": data]
+    private func wrapPayload(type: String, data: String, quote: QuoteContent? = nil) -> String {
+        var obj: [String: Any] = ["type": type, "data": data]
+        if let quote { obj["quote"] = quote.wireDict }
         if let d = try? JSONSerialization.data(withJSONObject: obj),
            let s = String(data: d, encoding: .utf8) { return s }
         return data
     }
 
-    private func unwrapPayload(_ plaintext: String) -> (type: String, data: String) {
+    private func unwrapPayload(_ plaintext: String) -> (type: String, data: String, quote: QuoteContent?) {
         if let d = plaintext.data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: d) as? [String: String],
-           let type = obj["type"], let data = obj["data"] {
-            return (type, data)
+           let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+           let type = obj["type"] as? String,
+           let data = obj["data"] as? String {
+            let quote = (obj["quote"] as? [String: String]).flatMap(QuoteContent.from)
+            return (type, data, quote)
         }
-        return ("text", plaintext) // legacy fallback
+        return ("text", plaintext, nil) // legacy fallback
     }
 
-    func sendMessage(content: String) {
+    func sendMessage(content: String, quotedMessage: Message? = nil) {
         let seq = nextSeq; nextSeq += 1
-        let payload = wrapPayload(type: "text", data: content)
+        let quote: QuoteContent? = quotedMessage.flatMap { makeQuoteContent(from: $0) }
+        let payload = wrapPayload(type: "text", data: content, quote: quote)
         guard let (encryptedAESKey, encryptedContent) = encryptMessage(payload) else { return }
 
         let message: [String: Any] = [
@@ -604,10 +620,10 @@ class ChatViewModel: ObservableObject {
         ]
 
         sendJSON(message)
-        messages.append(Message(content: content, isFromMe: true, isTyping: false, seq: seq))
+        messages.append(Message(content: content, isFromMe: true, isTyping: false, seq: seq, quote: quote))
     }
 
-    func sendImage(_ imageData: Data) {
+    func sendImage(_ imageData: Data, quotedMessage: Message? = nil) {
         guard peerPublicKey != nil else { return }
         // After two base64 passes + JSON overhead the wire size is ~1.78x raw.
         // Server max_size is 10MB, so reject anything that would exceed that.
@@ -618,8 +634,9 @@ class ChatViewModel: ObservableObject {
             return
         }
         let seq = nextSeq; nextSeq += 1
+        let quote: QuoteContent? = quotedMessage.flatMap { makeQuoteContent(from: $0) }
         let base64 = imageData.base64EncodedString()
-        let payload = wrapPayload(type: "image", data: base64)
+        let payload = wrapPayload(type: "image", data: base64, quote: quote)
         guard let encrypted = encryptMessage(payload) else { return }
         let message: [String: Any] = [
             "action": "send_message",
@@ -630,7 +647,7 @@ class ChatViewModel: ObservableObject {
             "seq": seq
         ]
         sendJSON(message)
-        self.messages.append(Message(content: "", isFromMe: true, isTyping: false, imageData: imageData, seq: seq))
+        self.messages.append(Message(content: "", isFromMe: true, isTyping: false, imageData: imageData, seq: seq, quote: quote))
     }
 
     private func sendJSON(_ dictionary: [String: Any]) {
@@ -972,11 +989,11 @@ extension ChatViewModel: WebSocketDelegate {
                 if let encryptedAESKey = json["encrypted_aes_key"] as? String,
                    let encryptedContent = json["encrypted_content"] as? String,
                    let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
-                    let (type, data) = self.unwrapPayload(decryptedContent)
+                    let (type, data, quote) = self.unwrapPayload(decryptedContent)
                     if type == "image", let imgData = Data(base64Encoded: data) {
-                        self.messages.append(Message(content: "", isFromMe: false, isTyping: false, imageData: imgData))
+                        self.messages.append(Message(content: "", isFromMe: false, isTyping: false, imageData: imgData, quote: quote))
                     } else {
-                        self.messages.append(Message(content: data, isFromMe: false, isTyping: false))
+                        self.messages.append(Message(content: data, isFromMe: false, isTyping: false, quote: quote))
                     }
                 }
 
@@ -1037,11 +1054,11 @@ extension ChatViewModel: WebSocketDelegate {
                     self.messages.removeAll { $0.isPendingPlaceholder }
                     let isoFormatter = ISO8601DateFormatter()
                     let timestamp = (json["timestamp"] as? String).flatMap { isoFormatter.date(from: $0) }
-                    let (type, data) = self.unwrapPayload(decryptedContent)
+                    let (type, data, quote) = self.unwrapPayload(decryptedContent)
                     if type == "image", let imgData = Data(base64Encoded: data) {
-                        self.messages.append(Message(content: "", isFromMe: false, isTyping: false, timestamp: timestamp, imageData: imgData))
+                        self.messages.append(Message(content: "", isFromMe: false, isTyping: false, timestamp: timestamp, imageData: imgData, quote: quote))
                     } else {
-                        self.messages.append(Message(content: data, isFromMe: false, isTyping: false, timestamp: timestamp))
+                        self.messages.append(Message(content: data, isFromMe: false, isTyping: false, timestamp: timestamp, quote: quote))
                     }
                     // Re-insert placeholder with updated count if more messages are coming
                     if let remaining = json["pending_count"] as? Int, remaining > 0 {
@@ -1106,6 +1123,7 @@ struct ContentView: View {
     @State private var selectedImage: UIImage? = nil
     @State private var fullScreenImageItem: IdentifiableImage? = nil
     @State private var showMemeSearch: Bool = false
+    @State private var quotedMessage: Message? = nil
 
     var canSendMessage: Bool {
         return viewModel.peerPublicKey != nil
@@ -1193,16 +1211,22 @@ struct ContentView: View {
         .onChange(of: selectedImage) { image in
             guard let image else { return }
             selectedImage = nil
+            let captured = quotedMessage
+            quotedMessage = nil
             DispatchQueue.global(qos: .userInitiated).async {
                 guard let data = processImageForSending(image) else { return }
-                DispatchQueue.main.async { viewModel.sendImage(data) }
+                DispatchQueue.main.async { viewModel.sendImage(data, quotedMessage: captured) }
             }
         }
         .sheet(isPresented: $showMemeSearch) {
+            let captured = quotedMessage
             MemeSearchView { image in
                 DispatchQueue.global(qos: .userInitiated).async {
                     guard let data = processImageForSending(image) else { return }
-                    DispatchQueue.main.async { viewModel.sendImage(data) }
+                    DispatchQueue.main.async {
+                        viewModel.sendImage(data, quotedMessage: captured)
+                        quotedMessage = nil
+                    }
                 }
             }
         }
@@ -1379,6 +1403,9 @@ struct ContentView: View {
                             viewModel.reportUser()
                         }, showTimestamp: showTimestamps, onImageTap: { image in
                             fullScreenImageItem = IdentifiableImage(image: image)
+                        }, onQuote: {
+                            quotedMessage = message
+                            isTextFieldFocused = true
                         })
                     }
                     if !viewModel.typingContent.isEmpty {
@@ -1435,7 +1462,51 @@ struct ContentView: View {
     }
 
     var inputArea: some View {
-        HStack(spacing: 10) {
+        VStack(spacing: 0) {
+            // Quote preview bar — shown when the user has selected a message to quote
+            if let quoted = quotedMessage {
+                HStack(spacing: 8) {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.7))
+                        .frame(width: 3, height: 36)
+                        .cornerRadius(1.5)
+                    if let imgData = quoted.imageData, let uiImage = UIImage(data: imgData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 36, height: 36)
+                            .clipped()
+                            .cornerRadius(4)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(quoted.isFromMe ? "You" : "Peer")
+                            .font(.caption.bold())
+                            .foregroundColor(.white.opacity(0.85))
+                        if quoted.imageData != nil {
+                            Text("[Image]")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.6))
+                                .lineLimit(1)
+                        } else {
+                            Text(quoted.content)
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.6))
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer()
+                    Button(action: { quotedMessage = nil }) {
+                        Image(systemName: "xmark")
+                            .font(.caption.bold())
+                            .foregroundColor(.white.opacity(0.6))
+                            .padding(6)
+                    }
+                }
+                .frame(height: 50)
+                .padding(.horizontal, 15)
+                .background(Color.white.opacity(0.08))
+            }
+            HStack(spacing: 10) {
             Button(action: { showImageSourceDialog = true }) {
                 Image(systemName: "photo")
                     .foregroundColor(.white)
@@ -1488,6 +1559,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 15)
         .padding(.vertical, 10)
+        } // VStack
         .background(Color.black.opacity(0.1))
     }
 
@@ -1518,8 +1590,9 @@ struct ContentView: View {
             return
         }
         if canSendMessage && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            viewModel.sendMessage(content: messageText)
+            viewModel.sendMessage(content: messageText, quotedMessage: quotedMessage)
             messageText = ""
+            quotedMessage = nil
             isTextFieldFocused = true
         }
     }
@@ -1534,6 +1607,7 @@ struct MessageView: View {
     let onReport: () -> Void
     var showTimestamp: Bool = false
     var onImageTap: (UIImage) -> Void = { _ in }
+    var onQuote: () -> Void = {}
 
     private static let timeOnlyFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -1602,37 +1676,7 @@ struct MessageView: View {
                             }
                         }
                     }
-                    if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: 220)
-                            .cornerRadius(10)
-                            .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
-                            .onTapGesture { onImageTap(uiImage) }
-                            .contextMenu {
-                                if !message.isFromMe {
-                                    Button(role: .destructive, action: onReport) {
-                                        Label("Report User", systemImage: "exclamationmark.triangle")
-                                    }
-                                }
-                            }
-                    } else {
-                        Text(message.content)
-                            .padding(.vertical, 4)
-                            .padding(.horizontal, 10)
-                            .background(message.isFromMe ? Color.blue.opacity(message.isTyping ? 0.4 : 0.8) : Color.purple.opacity(message.isTyping ? 0.4 : 0.8))
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
-                            .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
-                            .contextMenu {
-                                if !message.isFromMe && !message.isSystem {
-                                    Button(role: .destructive, action: onReport) {
-                                        Label("Report User", systemImage: "exclamationmark.triangle")
-                                    }
-                                }
-                            }
-                    }
+                    messageBubble
                     if !message.isFromMe {
                         Spacer()
                     }
@@ -1647,6 +1691,117 @@ struct MessageView: View {
             }
         }
         .padding(.vertical, 1)
+    }
+
+    // Accent color for the left quote bar — blue for own messages, purple for peer's
+    private var bubbleColor: Color {
+        message.isFromMe
+            ? Color.blue.opacity(message.isTyping ? 0.4 : 0.8)
+            : Color.purple.opacity(message.isTyping ? 0.4 : 0.8)
+    }
+
+    // Inline quote block shown at the top of a bubble when the message has a quote
+    @ViewBuilder
+    private var quoteBlock: some View {
+        Group {
+            if let q = message.quote {
+                switch q.type {
+                case "image":
+                    if let imgData = q.imageData, let uiImage = UIImage(data: imgData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 36, height: 36)
+                            .clipped()
+                            .cornerRadius(4)
+                    } else {
+                        EmptyView()
+                    }
+                default:
+                    Text(q.text ?? "")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.75))
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.leading, 9)
+        .padding(.trailing, 6)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Color.white.opacity(0.55))
+                .frame(width: 3)
+                .cornerRadius(1.5)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.15))
+        .cornerRadius(6)
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
+    }
+
+    // The main message bubble — handles text/image and optional quote header
+    @ViewBuilder
+    private var messageBubble: some View {
+        let hasQuote = message.quote != nil
+        let sharedContextMenu = Group {
+            if !message.isTyping {
+                Button(action: onQuote) {
+                    Label("Quote", systemImage: "quote.bubble")
+                }
+            }
+            if !message.isFromMe {
+                Button(role: .destructive, action: onReport) {
+                    Label("Report User", systemImage: "exclamationmark.triangle")
+                }
+            }
+        }
+
+        if hasQuote {
+            // Wrap quote + content in a single styled bubble
+            VStack(alignment: .leading, spacing: 0) {
+                quoteBlock
+                if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 200)
+                        .cornerRadius(6)
+                        .onTapGesture { onImageTap(uiImage) }
+                        .padding(6)
+                } else {
+                    Text(message.content)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .foregroundColor(.white)
+                }
+            }
+            .background(bubbleColor)
+            .cornerRadius(10)
+            .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+            .contextMenu { sharedContextMenu }
+        } else if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 220)
+                .cornerRadius(10)
+                .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+                .onTapGesture { onImageTap(uiImage) }
+                .contextMenu { sharedContextMenu }
+        } else {
+            Text(message.content)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 10)
+                .background(bubbleColor)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+                .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+                .contextMenu { sharedContextMenu }
+        }
     }
 }
 
@@ -1665,6 +1820,31 @@ private class WCAdapter: NSObject, WCSessionDelegate {
     }
 }
 
+// MARK: - QuoteContent
+
+struct QuoteContent {
+    let type: String      // "text", "image" — extensible for future types
+    let text: String?     // populated when type == "text"
+    let imageData: Data?  // populated when type == "image" (thumbnail)
+
+    static func text(_ s: String) -> QuoteContent { QuoteContent(type: "text", text: s, imageData: nil) }
+    static func image(_ d: Data) -> QuoteContent { QuoteContent(type: "image", text: nil, imageData: d) }
+
+    // Serialize to wire dict — "data" field holds text or base64 depending on type
+    var wireDict: [String: String] {
+        ["type": type, "data": type == "image" ? (imageData?.base64EncodedString() ?? "") : (text ?? "")]
+    }
+
+    static func from(wireDict d: [String: String]) -> QuoteContent? {
+        guard let type = d["type"], let data = d["data"] else { return nil }
+        switch type {
+        case "text":  return .text(data)
+        case "image": return Data(base64Encoded: data).map { .image($0) }
+        default:      return .text(data)   // forward-compatible: unknown types shown as text
+        }
+    }
+}
+
 struct Message: Identifiable {
     let id = UUID()
     let content: String
@@ -1676,8 +1856,10 @@ struct Message: Identifiable {
     let imageData: Data?
     let seq: Int?
     var isAcked: Bool
+    // At most one layer of quoting; quote holds a text snippet or image thumbnail
+    let quote: QuoteContent?
 
-    init(content: String, isFromMe: Bool, isTyping: Bool, isSystem: Bool = false, isPendingPlaceholder: Bool = false, timestamp: Date? = nil, imageData: Data? = nil, seq: Int? = nil, isAcked: Bool = false) {
+    init(content: String, isFromMe: Bool, isTyping: Bool, isSystem: Bool = false, isPendingPlaceholder: Bool = false, timestamp: Date? = nil, imageData: Data? = nil, seq: Int? = nil, isAcked: Bool = false, quote: QuoteContent? = nil) {
         self.content = content
         self.isFromMe = isFromMe
         self.isTyping = isTyping
@@ -1687,6 +1869,7 @@ struct Message: Identifiable {
         self.imageData = imageData
         self.seq = seq
         self.isAcked = isAcked
+        self.quote = quote
     }
 }
 
@@ -1758,6 +1941,19 @@ private func processImageForSending(_ image: UIImage) -> Data? {
     CGImageDestinationAddImage(dest, cgImage, [kCGImageDestinationLossyCompressionQuality: 0.75] as CFDictionary)
     guard CGImageDestinationFinalize(dest) else { return nil }
     return data as Data
+}
+
+// Generates a square thumbnail for use as a quote preview. Scale=1 so size is in pixels.
+private func makeQuoteThumbnail(_ data: Data) -> Data? {
+    guard let image = UIImage(data: data) else { return nil }
+    let side: CGFloat = 60
+    let scale = max(side / image.size.width, side / image.size.height)
+    let scaledSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+    let origin = CGPoint(x: (side - scaledSize.width) / 2, y: (side - scaledSize.height) / 2)
+    let format = UIGraphicsImageRendererFormat(); format.scale = 1.0; format.opaque = true
+    let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
+    let thumb = renderer.image { _ in image.draw(in: CGRect(origin: origin, size: scaledSize)) }
+    return thumb.jpegData(compressionQuality: 0.6)
 }
 
 // MARK: - Screenshot Protection
