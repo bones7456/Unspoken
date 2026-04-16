@@ -1,45 +1,70 @@
-# Unspoken - Everything is understood in Unspoken
+# Unspoken — Everything is understood in Unspoken
 
-Unspoken is an innovative instant messaging application designed to provide users with a more real-time and private chatting experience.
+Unspoken is an end-to-end encrypted, anonymous one-on-one chat app for iOS. It goes beyond traditional messaging by letting you see what the other person is typing in real-time — hesitations, edits, and all.
 
-## Product Features
+## Features
 
-- **Ultra Real-time Communication**: Goes beyond traditional IM by allowing you to see what the other person is typing in real-time.
-- **End-to-End Encryption**: Employs high-strength end-to-end encryption technology to ensure the absolute security of your conversations.
-- **Instant Feedback**: Observe the other person's thought process in real-time, including hesitations and edits, making communication more natural.
-- **Flexible Message Handling**: Choose to send or not send the content you're typing, providing more privacy control.
+- **Real-time typing display** — see what the other person is typing as they type it, in a live preview bubble
+- **End-to-end encryption** — RSA-2048 for key exchange, AES-256-GCM for messages; the server never sees plaintext
+- **Anonymous** — no account, no phone number, no email required
+- **Pinned rooms** — make a room persistent across app restarts and server restarts; messages queue for offline peers and deliver on reconnect
+- **Image & meme sharing** — send photos from your camera roll or search for memes by keyword
+- **Heart rate sharing** — share your live heart rate with your peer via Apple Watch; they feel it as a haptic lub-dub rhythm
+- **Screenshot protection** — chat content is blocked from screenshots and screen recordings
+- **Auto-reconnect** — seamlessly reconnects on Wi-Fi/cellular switching or any other interruption
 
 ## How It Works
 
-1. **Real-time Input Display**: What you're typing is displayed in real-time in a gray bubble on the other person's screen.
-2. **Message Sending**: Press Enter to officially send a message, changing the gray bubble to normal color.
-3. **Dynamic Display**: When you exit the chat interface, the gray bubble disappears from the other person's screen.
-4. **One-on-One Chat**: Currently supports only one-on-one chat to provide the best real-time interactive experience.
+1. One person creates a room and shares the room link
+2. The other person joins via the link
+3. Keys are exchanged — an encrypted channel is established
+4. Start chatting; what you type appears live on the other person's screen
+5. Press Send to commit a message, or just clear it — your choice
 
-## Technical Features
+## Architecture
 
-- Uses WebSocket technology to maintain real-time connections.
-- Implements end-to-end encryption using RSA and AES encryption algorithms.
-- iOS client developed with SwiftUI, providing a smooth user interface.
-- Server-side implemented with Python and asyncio for high concurrency processing.
-- Simple
+```
+iOS client (SwiftUI)  ←—— WSS ——→  Python server  ←—— WSS ——→  iOS client (SwiftUI)
+```
 
-## Advantages
-
-1. **Natural Communication**: Provides an experience closer to face-to-face conversation, making online communication more authentic.
-2. **Deep Interaction**: Understand the other person's thought process, enhancing the depth and understanding of communication.
-3. **Privacy Protection**: Option to not officially send messages, providing a higher level of privacy protection.
-4. **Self-Controlled**: Fully self-controlled, recommend deploying your own server, no ads, no backdoors, no monitoring.
-
-## Notes
-
-- This application requires a stable network connection to ensure the best experience.
-- Currently only supports one-on-one chat mode.
+- **iOS client** — SwiftUI, [Starscream](https://github.com/daltoniam/Starscream) for WebSocket, CryptoKit + Security framework for encryption
+- **Server** — single-file Python (~650 LOC), `asyncio` + `websockets`, flat JSON file persistence
+- **watchOS companion** — HKWorkoutSession for real-time heart rate, WatchConnectivity to relay BPM to iPhone
 
 ## Getting Started
 
-1. Download and install the Unspoken app.
-2. Create a new room or join an existing one.
-3. Start experiencing a new way of instant messaging!
+### Use the hosted app
 
-Welcome to Unspoken, where everything lies in the unspoken!
+Download Unspoken on the App Store and connect to the default server. The hosted version is a paid app — it supports ongoing server costs and development.
+
+### Self-host
+
+If you prefer to run your own server:
+
+```bash
+cd Unspoken-server
+pip install websockets cryptography
+python3 unspoken.py --no-ssl   # for local development
+```
+
+For production, place a TLS certificate at the paths in `unspoken.py` (Let's Encrypt works well) and run without `--no-ssl`.
+
+### Build the iOS client
+
+```bash
+open Unspoken.xcodeproj
+```
+
+Requires Xcode 15+, iOS 15.0+ deployment target. The only dependency is Starscream, managed via Swift Package Manager.
+
+To point the client at your own server, enter your server address and port on the connection screen, or use the URL scheme:
+
+```
+unspoken://your-host:8765/room_id
+```
+
+## License
+
+MIT — you are free to use, modify, and redistribute this code, including for commercial purposes, as long as the copyright notice is retained.
+
+The source code is open so that anyone can verify there are no backdoors or hidden data collection. If you have the technical ability, you are encouraged to build and host your own instance. If you'd rather use a ready-made solution, the App Store version connects to a hosted server maintained by the author.
