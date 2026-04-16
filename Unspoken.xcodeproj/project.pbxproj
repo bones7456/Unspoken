@@ -7,12 +7,23 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0193A61A5F80249E1BFF288A /* ChatViewModel+Crypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C505B8CE2BFBE243EBA3E2 /* ChatViewModel+Crypto.swift */; };
+		030C63C4D4B1972A86FE6E06 /* MemeSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D7DE9D891800E0530E18E9D /* MemeSearchView.swift */; };
+		0EC51F6FD075B3A4BE6D4E3B /* MessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F75D0AAAD32FFA12D5F72E1A /* MessageView.swift */; };
+		23302727FE83731000625271 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29DFCF37AFC447A104B9AC1A /* ChatViewModel.swift */; };
+		729A150EAE4793319564AD3F /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83D530576D5CF8B70831C69D /* Models.swift */; };
+		A0971D0109531E663497B79C /* ImagePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F25FD67A1E3D979601DFA547 /* ImagePicker.swift */; };
 		A2020EA02F57C7F200ECD0B9 /* UnspokenWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = A2020E962F57C7F100ECD0B9 /* UnspokenWatch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A27A1D222C6891FA005954F6 /* UnspokenApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27A1D212C6891FA005954F6 /* UnspokenApp.swift */; };
 		A27A1D242C6891FA005954F6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27A1D232C6891FA005954F6 /* ContentView.swift */; };
 		A27A1D262C6891FC005954F6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A27A1D252C6891FC005954F6 /* Assets.xcassets */; };
 		A27A1D292C6891FC005954F6 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A27A1D282C6891FC005954F6 /* Preview Assets.xcassets */; };
 		A27A1D312C689A1D005954F6 /* Starscream in Frameworks */ = {isa = PBXBuildFile; productRef = A27A1D302C689A1D005954F6 /* Starscream */; };
+		C223557C715A99507C4F589B /* ChatViewModel+WebSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BE7D39E476A4EB702BA5CBE /* ChatViewModel+WebSocket.swift */; };
+		DDFF87178E1374F788630E97 /* ChatViewModel+PinRoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4803AD3F35D795E904CD172C /* ChatViewModel+PinRoom.swift */; };
+		F2974FEC758A287941D1C9C9 /* ChatViewModel+HeartRate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EB6419D5E21774D0EF2F2FB /* ChatViewModel+HeartRate.swift */; };
+		F5A3623EA60C945E9DF5015C /* ScreenshotProtected.swift in Sources */ = {isa = PBXBuildFile; fileRef = B97FB0F4E83DC6878CCDD5A6 /* ScreenshotProtected.swift */; };
+		F6A82ECF2CF871674F5A8CBD /* WCAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45CD05A26DDCD28A72E6E8A6 /* WCAdapter.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -40,6 +51,13 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0D7DE9D891800E0530E18E9D /* MemeSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemeSearchView.swift; sourceTree = "<group>"; };
+		1BE7D39E476A4EB702BA5CBE /* ChatViewModel+WebSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatViewModel+WebSocket.swift"; sourceTree = "<group>"; };
+		1EB6419D5E21774D0EF2F2FB /* ChatViewModel+HeartRate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatViewModel+HeartRate.swift"; sourceTree = "<group>"; };
+		29DFCF37AFC447A104B9AC1A /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
+		45CD05A26DDCD28A72E6E8A6 /* WCAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WCAdapter.swift; sourceTree = "<group>"; };
+		4803AD3F35D795E904CD172C /* ChatViewModel+PinRoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatViewModel+PinRoom.swift"; sourceTree = "<group>"; };
+		83D530576D5CF8B70831C69D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		A2020E912F57C36E00ECD0B9 /* Unspoken.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Unspoken.entitlements; sourceTree = "<group>"; };
 		A2020E962F57C7F100ECD0B9 /* UnspokenWatch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "UnspokenWatch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A27A1D1E2C6891FA005954F6 /* Unspoken.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Unspoken.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -48,6 +66,10 @@
 		A27A1D252C6891FC005954F6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A27A1D282C6891FC005954F6 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		A2FAF8E72C71D7BD0024AAB5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		A8C505B8CE2BFBE243EBA3E2 /* ChatViewModel+Crypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatViewModel+Crypto.swift"; sourceTree = "<group>"; };
+		B97FB0F4E83DC6878CCDD5A6 /* ScreenshotProtected.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotProtected.swift; sourceTree = "<group>"; };
+		F25FD67A1E3D979601DFA547 /* ImagePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePicker.swift; sourceTree = "<group>"; };
+		F75D0AAAD32FFA12D5F72E1A /* MessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -98,6 +120,17 @@
 				A2FAF8E72C71D7BD0024AAB5 /* Info.plist */,
 				A27A1D212C6891FA005954F6 /* UnspokenApp.swift */,
 				A27A1D232C6891FA005954F6 /* ContentView.swift */,
+				83D530576D5CF8B70831C69D /* Models.swift */,
+				45CD05A26DDCD28A72E6E8A6 /* WCAdapter.swift */,
+				29DFCF37AFC447A104B9AC1A /* ChatViewModel.swift */,
+				A8C505B8CE2BFBE243EBA3E2 /* ChatViewModel+Crypto.swift */,
+				4803AD3F35D795E904CD172C /* ChatViewModel+PinRoom.swift */,
+				1EB6419D5E21774D0EF2F2FB /* ChatViewModel+HeartRate.swift */,
+				1BE7D39E476A4EB702BA5CBE /* ChatViewModel+WebSocket.swift */,
+				F75D0AAAD32FFA12D5F72E1A /* MessageView.swift */,
+				F25FD67A1E3D979601DFA547 /* ImagePicker.swift */,
+				B97FB0F4E83DC6878CCDD5A6 /* ScreenshotProtected.swift */,
+				0D7DE9D891800E0530E18E9D /* MemeSearchView.swift */,
 				A27A1D252C6891FC005954F6 /* Assets.xcassets */,
 				A27A1D272C6891FC005954F6 /* Preview Content */,
 			);
@@ -231,6 +264,17 @@
 			buildActionMask = 2147483647;
 			files = (
 				A27A1D242C6891FA005954F6 /* ContentView.swift in Sources */,
+				729A150EAE4793319564AD3F /* Models.swift in Sources */,
+				F6A82ECF2CF871674F5A8CBD /* WCAdapter.swift in Sources */,
+				23302727FE83731000625271 /* ChatViewModel.swift in Sources */,
+				0193A61A5F80249E1BFF288A /* ChatViewModel+Crypto.swift in Sources */,
+				DDFF87178E1374F788630E97 /* ChatViewModel+PinRoom.swift in Sources */,
+				F2974FEC758A287941D1C9C9 /* ChatViewModel+HeartRate.swift in Sources */,
+				C223557C715A99507C4F589B /* ChatViewModel+WebSocket.swift in Sources */,
+				0EC51F6FD075B3A4BE6D4E3B /* MessageView.swift in Sources */,
+				A0971D0109531E663497B79C /* ImagePicker.swift in Sources */,
+				F5A3623EA60C945E9DF5015C /* ScreenshotProtected.swift in Sources */,
+				030C63C4D4B1972A86FE6E06 /* MemeSearchView.swift in Sources */,
 				A27A1D222C6891FA005954F6 /* UnspokenApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -266,7 +310,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.13;
+				MARKETING_VERSION = 0.3.14;
 				PRODUCT_BUNDLE_IDENTIFIER = Senob.Unspoken.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -299,7 +343,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.13;
+				MARKETING_VERSION = 0.3.14;
 				PRODUCT_BUNDLE_IDENTIFIER = Senob.Unspoken.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -438,7 +482,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Unspoken/Unspoken.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 43;
+				CURRENT_PROJECT_VERSION = 44;
 				DEVELOPMENT_ASSET_PATHS = "\"Unspoken/Preview Content\"";
 				DEVELOPMENT_TEAM = RHVTXHK83V;
 				ENABLE_PREVIEWS = YES;
@@ -457,7 +501,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.13;
+				MARKETING_VERSION = 0.3.14;
 				PRODUCT_BUNDLE_IDENTIFIER = Senob.Unspoken;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -473,7 +517,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Unspoken/Unspoken.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 43;
+				CURRENT_PROJECT_VERSION = 44;
 				DEVELOPMENT_ASSET_PATHS = "\"Unspoken/Preview Content\"";
 				DEVELOPMENT_TEAM = RHVTXHK83V;
 				ENABLE_PREVIEWS = YES;
@@ -492,7 +536,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.13;
+				MARKETING_VERSION = 0.3.14;
 				PRODUCT_BUNDLE_IDENTIFIER = Senob.Unspoken;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
