@@ -22,9 +22,7 @@ class ChatViewModel: ObservableObject {
     @Published var serverAddress: String = "wss://unspoken.luy.li:8765"
     @Published var serverHost: String = "unspoken.luy.li"
     @Published var serverPort: String = "8765"
-    #if DEBUG
     @Published var useSSL: Bool = true
-    #endif
     @Published var role: String = ""
     @Published var isPinned: Bool = false
     @Published var peerIsOnline: Bool = false
@@ -205,6 +203,8 @@ class ChatViewModel: ObservableObject {
             role = ""
             messages = []
             typingContent = ""
+            peerPublicKey = nil
+            peerUserId = nil
             pinRequestPending = false
             pinRequestReceived = false
         } else {
@@ -224,11 +224,7 @@ class ChatViewModel: ObservableObject {
     func updateServerAddress(address: String, port: String) {
         self.serverHost = address
         self.serverPort = port
-        #if DEBUG
         let scheme = useSSL ? "wss" : "ws"
-        #else
-        let scheme = "wss"
-        #endif
         self.serverAddress = "\(scheme)://\(address):\(port)"
         print("Server set to \(serverAddress)")
         setupWebSocket()

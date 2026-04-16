@@ -140,6 +140,9 @@ extension ChatViewModel: WebSocketDelegate {
                     self.messages.append(Message(content: "\(role.capitalized) has left the room.", isFromMe: false, isTyping: false, isSystem: true))
                 }
                 self.peerIsOnline = false
+                self.peerPublicKey = nil
+                self.peerUserId = nil
+                self.typingContent = ""
                 self.stopPeerHeartRate()
                 self.stopHeartRateMode(notifyPeer: false)
 
@@ -221,6 +224,7 @@ extension ChatViewModel: WebSocketDelegate {
                 }
 
             case "peer_status":
+                guard (json["room_id"] as? String) == self.roomId else { break }
                 if let status = json["status"] as? String {
                     self.peerIsOnline = (status == "online")
                     let statusText = status == "online" ? "Peer is now online." : "Peer went offline."

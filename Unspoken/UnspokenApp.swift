@@ -141,7 +141,6 @@ struct RoomSelectionView: View {
                                 serverField(icon: "network", label: "Port",
                                             placeholder: "Port", text: $chatViewModel.serverPort,
                                             keyboard: .numberPad)
-                                #if DEBUG
                                 Divider().background(Color.white.opacity(0.25)).padding(.leading, 44)
                                 HStack(spacing: 12) {
                                     Image(systemName: "lock")
@@ -157,7 +156,6 @@ struct RoomSelectionView: View {
                                 }
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 12)
-                                #endif
                             }
                             .background(Color.white.opacity(0.18))
                             .cornerRadius(14)

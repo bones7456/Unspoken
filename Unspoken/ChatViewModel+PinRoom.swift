@@ -105,10 +105,12 @@ extension ChatViewModel {
                     ChatViewModel.kSavedPrivateKey, ChatViewModel.kSavedPublicKey] {
             defaults.removeObject(forKey: key)
         }
-        isPinned         = false
+        isPinned           = false
         pinRequestPending  = false
         pinRequestReceived = false
-        peerIsOnline     = false
+        peerIsOnline       = false
+        peerPublicKey      = nil
+        peerUserId         = nil
     }
 
     // MARK: - Pin Actions

@@ -1,3 +1,10 @@
+# /// script
+# dependencies = [
+#   "websockets",
+#   "cryptography",
+# ]
+# ///
+
 import asyncio
 import websockets
 import json
@@ -157,33 +164,23 @@ async def handle_connection(websocket):
                     continue
 
                 connected_users[user_id] = websocket
-                public_key_pem = data['public_key']
+                public_key_pem = data.get('public_key', '')
+                if len(public_key_pem) > 8192:
+                    log_message("SYSTEM", "Server", f"User {user_id} sent oversized public key ({len(public_key_pem)}B), rejected")
+                    continue
                 user_public_keys[user_id] = public_key_pem
                 client_version = data.get('client_version', 'unknown')
                 log_message("SYSTEM", "Server", f"User {user_id} logged in (v{client_version})")
 
-                # Notify peers in pinned rooms that this user is online
-                for room_id, pin_info in pinned_rooms.items():
-                    peer_user_id = None
-                    if pin_info['host_user_id'] == user_id:
-                        peer_user_id = pin_info['guest_user_id']
-                    elif pin_info['guest_user_id'] == user_id:
-                        peer_user_id = pin_info['host_user_id']
-                    if peer_user_id and peer_user_id in connected_users:
-                        try:
-                            notification = json.dumps({
-                                'action': 'peer_status',
-                                'room_id': room_id,
-                                'status': 'online'
-                            })
-                            await connected_users[peer_user_id].send(notification)
-                            log_message("SENT", peer_user_id, notification)
-                        except websockets.exceptions.ConnectionClosed:
-                            pass
-
             elif action == 'create_room':
                 if not await check_available_user_in_data(data, websocket):
                     log_message("SYSTEM", "Server", f"Blocked user {user_id} attempted to create room")
+                    continue
+                user_room_count = sum(1 for r in rooms.values() if r.get('host') == user_id)
+                if user_room_count >= 3:
+                    error_message = json.dumps({'action': 'error', 'message': 'Too many active rooms. Please close existing rooms first.'})
+                    await websocket.send(error_message)
+                    log_message("SENT", user_id, error_message)
                     continue
                 global next_room_id
                 room_id = str(next_room_id)
@@ -289,14 +286,6 @@ async def handle_connection(websocket):
                             })
                             await connected_users[peer_user_id].send(notification)
                             log_message("SENT", peer_user_id, notification)
-                            # Send peer_status online to peer
-                            status_notification = json.dumps({
-                                'action': 'peer_status',
-                                'room_id': room_id,
-                                'status': 'online'
-                            })
-                            await connected_users[peer_user_id].send(status_notification)
-                            log_message("SENT", peer_user_id, status_notification)
                     else:
                         error_message = json.dumps({
                             'action': 'error',
@@ -437,7 +426,6 @@ async def handle_connection(websocket):
                 encrypted_aes_key = data['encrypted_aes_key']
                 encrypted_content = data['encrypted_content']
                 if room_id in rooms:
-                    rooms[room_id]['messages'].append({'role': role, 'encrypted_aes_key': encrypted_aes_key, 'encrypted_content': encrypted_content})
                     other_role = 'guest' if role == 'host' else 'host'
                     other_user_id = rooms[room_id][other_role]
                     if other_user_id and other_user_id in connected_users:
@@ -580,6 +568,9 @@ async def handle_connection(websocket):
                 room_id = data['room_id']
                 role = data['role']
                 pending_msg_id = data['pending_msg_id']
+                if room_role_to_userid.get(f"{room_id}:{role}") != user_id:
+                    log_message("SYSTEM", "Server", f"Unauthorized pending_ack from {user_id} for room {room_id} role {role}")
+                    continue
                 queue_key = f"for_{role}"
                 if room_id in pending_messages and queue_key in pending_messages[room_id]:
                     before = len(pending_messages[room_id][queue_key])
@@ -592,7 +583,16 @@ async def handle_connection(websocket):
                         log_message("SYSTEM", "Server", f"Deleted pending msg {pending_msg_id} for {role} in room {room_id}")
 
             elif action == 'report_user':
-                await handle_report_user(websocket, data)
+                reported_id = data.get('reported_user_id')
+                in_same_room = reported_id and any(
+                    (r.get('host') == user_id and r.get('guest') == reported_id) or
+                    (r.get('guest') == user_id and r.get('host') == reported_id)
+                    for r in rooms.values()
+                )
+                if in_same_room:
+                    await handle_report_user(websocket, data)
+                else:
+                    log_message("SYSTEM", "Server", f"User {user_id} attempted to report {reported_id} but they are not in the same room")
     except websockets.exceptions.ConnectionClosedError:
         log_message("SYSTEM", "Server", f"Connection closed for user {user_id}")
     except websockets.exceptions.ConnectionClosedOK:
