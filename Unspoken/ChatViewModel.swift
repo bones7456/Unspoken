@@ -119,7 +119,10 @@ class ChatViewModel: ObservableObject {
     func setupWebSocket() {
         socket?.delegate = nil
         socket?.disconnect()
-        let url = URL(string: serverAddress)!
+        guard let url = URL(string: serverAddress) else {
+            print("Invalid server address: \(serverAddress)")
+            return
+        }
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
         socket = StarscreamWebSocket(request: request)

@@ -147,7 +147,8 @@ extension ChatViewModel: WebSocketDelegate {
                 self.stopPeerHeartRate()
                 self.stopHeartRateMode(notifyPeer: false)
                 self.messages.append(Message(content: "Host has left the room. The room is closed.", isFromMe: false, isTyping: false, isSystem: true))
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                    guard let self, self.isChatOpen else { return }
                     self.leaveRoom()
                 }
 
@@ -209,7 +210,8 @@ extension ChatViewModel: WebSocketDelegate {
                 self.stopPeerHeartRate()
                 self.stopHeartRateMode(notifyPeer: false)
                 self.messages.append(Message(content: "Room has been unpinned by peer.", isFromMe: false, isTyping: false, isSystem: true))
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                    guard let self, self.isChatOpen else { return }
                     self.isChatOpen = false
                     self.roomId = ""
                     self.role = ""

@@ -148,7 +148,7 @@ extension ChatViewModel {
             return
         }
         let interval = 60.0 / Double(bpm)
-        let gap = 0.5 - 0.0021 * Double(bpm)
+        let gap = max(0.05, 0.5 - 0.0021 * Double(bpm))
         heavy.impactOccurred()
         peerLubTick += 1
         DispatchQueue.main.asyncAfter(deadline: .now() + gap) { [weak self] in
