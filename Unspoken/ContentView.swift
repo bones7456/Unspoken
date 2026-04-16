@@ -331,18 +331,18 @@ struct ContentView: View {
                 .background(Color.white.opacity(0.08))
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: 6) {
                 Button(action: { showImageSourceDialog = true }) {
                     Image(systemName: "photo").foregroundColor(.white)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 36, height: 36)
                         .background(Color.white.opacity(0.2)).clipShape(Circle())
                 }
                 .disabled(!canSendMessage)
 
                 TextField(inputPlaceholder, text: $messageText)
-                    .padding(.horizontal, 15).padding(.vertical, 10)
-                    .background(Color.white.opacity(0.2)).cornerRadius(20)
-                    .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.3), lineWidth: 1))
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Color.white.opacity(0.2)).cornerRadius(18)
+                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.3), lineWidth: 1))
                     .focused($isTextFieldFocused)
                     .onChange(of: messageText) { newValue in
                         if canSendMessage { viewModel.sendTyping(content: newValue) }
@@ -352,21 +352,19 @@ struct ContentView: View {
 
                 Button(action: clearMessage) {
                     Image(systemName: "xmark.circle.fill").foregroundColor(.white)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 36, height: 36)
                         .background(Color.red.opacity(0.8)).clipShape(Circle())
-                        .shadow(color: .black.opacity(0.1), radius: 3, x: 0, y: 2)
                 }
                 .disabled(messageText.isEmpty || !canSendMessage)
 
                 Button(action: sendMessage) {
                     Image(systemName: "paperplane.fill").foregroundColor(.white)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 36, height: 36)
                         .background(Color.blue).clipShape(Circle())
-                        .shadow(color: .black.opacity(0.1), radius: 3, x: 0, y: 2)
                 }
                 .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !canSendMessage)
             }
-            .padding(.horizontal, 15).padding(.vertical, 10)
+            .padding(.horizontal, 12).padding(.vertical, 8)
         }
         .background(Color.black.opacity(0.1))
     }
