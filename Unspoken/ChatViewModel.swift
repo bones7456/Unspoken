@@ -194,31 +194,22 @@ class ChatViewModel: ObservableObject {
         isReconnecting = false
         stopHeartRateMode()
         stopPeerHeartRate()
-        if isPinned {
-            sendJSON(["action": "leave_room", "room_id": roomId, "role": role, "user_id": userId])
-            isChatOpen = false
-            isPinned = false
-            peerIsOnline = false
-            roomId = ""
-            role = ""
-            messages = []
-            typingContent = ""
-            peerPublicKey = nil
-            peerUserId = nil
-            pinRequestPending = false
-            pinRequestReceived = false
-        } else {
-            sendJSON(["action": "leave_room", "room_id": roomId, "role": role, "user_id": userId])
-            isChatOpen = false
-            roomId = ""
-            role = ""
-            messages = []
-            typingContent = ""
-            peerPublicKey = nil
-            peerUserId = nil
-            pinRequestPending = false
-            pinRequestReceived = false
-        }
+        sendJSON(["action": "leave_room", "room_id": roomId, "role": role, "user_id": userId])
+
+        // Clear all room state BEFORE flipping isChatOpen, so the parent view
+        // never observes a transient (!isChatOpen && !messages.isEmpty) frame
+        // that could leave a SwiftUI alert orphaned.
+        messages = []
+        typingContent = ""
+        peerPublicKey = nil
+        peerUserId = nil
+        roomId = ""
+        role = ""
+        isPinned = false
+        peerIsOnline = false
+        pinRequestPending = false
+        pinRequestReceived = false
+        isChatOpen = false
     }
 
     func updateServerAddress(address: String, port: String) {

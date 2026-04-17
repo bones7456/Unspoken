@@ -12,14 +12,33 @@ private struct IdentifiableImage: Identifiable {
     let image: UIImage
 }
 
+// MARK: - AppAlert
+// Single source of truth for all alerts on ContentView. Stacking multiple
+// `.alert` modifiers caused orphaned presentation contexts that froze the UI.
+private enum AppAlert: Identifiable {
+    case blockedWord
+    case copySuccess
+    case pinRequest
+    case heartRate(String)
+    case unpinConfirm
+
+    var id: String {
+        switch self {
+        case .blockedWord:  return "blockedWord"
+        case .copySuccess:  return "copySuccess"
+        case .pinRequest:   return "pinRequest"
+        case .heartRate:    return "heartRate"
+        case .unpinConfirm: return "unpinConfirm"
+        }
+    }
+}
+
 // MARK: - ContentView
 
 struct ContentView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var messageText: String = ""
-    @State private var showBlockedWordAlert: Bool = false
-    @State private var showCopySuccessAlert: Bool = false
-    @State private var showUnpinConfirm: Bool = false
+    @State private var activeAlert: AppAlert?
     @State private var heartPulse: Bool = false
     @State private var bgHeartScale: CGFloat = 1.0
     @State private var showTimestamps: Bool = false
@@ -49,36 +68,47 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .alert(isPresented: .constant(!viewModel.isChatOpen && !viewModel.messages.isEmpty)) {
-            Alert(
-                title: Text("Room Closed"),
-                message: Text(viewModel.messages.last?.content ?? ""),
-                dismissButton: .default(Text("OK")) { viewModel.messages = [] }
-            )
+        .alert(item: $activeAlert) { alert -> Alert in
+            switch alert {
+            case .blockedWord:
+                return Alert(
+                    title: Text("Notice"),
+                    message: Text("Message contains blocked words. Please modify and try again."),
+                    dismissButton: .default(Text("OK"))
+                )
+            case .copySuccess:
+                return Alert(
+                    title: Text("Link Copied"),
+                    message: Text("Room invitation link has been copied to clipboard."),
+                    dismissButton: .default(Text("OK"))
+                )
+            case .pinRequest:
+                return Alert(
+                    title: Text("Pin Request"),
+                    message: Text("Your peer wants to pin this room. Pinned rooms persist across sessions and support offline messaging. Accept?"),
+                    primaryButton: .default(Text("Accept")) { viewModel.acceptPin() },
+                    secondaryButton: .cancel(Text("Decline")) { viewModel.rejectPin() }
+                )
+            case .heartRate(let msg):
+                return Alert(
+                    title: Text("Heart Rate"),
+                    message: Text(msg),
+                    dismissButton: .default(Text("OK")) { viewModel.heartRateModeError = nil }
+                )
+            case .unpinConfirm:
+                return Alert(
+                    title: Text("Unpin this room?"),
+                    message: Text("This will permanently delete the room on both devices and the server, including any pending messages. This cannot be undone."),
+                    primaryButton: .destructive(Text("Unpin")) { viewModel.unpinRoom() },
+                    secondaryButton: .cancel()
+                )
+            }
         }
-        .alert("Notice", isPresented: $showBlockedWordAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Message contains blocked words. Please modify and try again.")
+        .onChange(of: viewModel.pinRequestReceived) { newValue in
+            if newValue && activeAlert == nil { activeAlert = .pinRequest }
         }
-        .alert("Link Copied", isPresented: $showCopySuccessAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Room invitation link has been copied to clipboard.")
-        }
-        .alert("Pin Request", isPresented: $viewModel.pinRequestReceived) {
-            Button("Accept") { viewModel.acceptPin() }
-            Button("Decline", role: .cancel) { viewModel.rejectPin() }
-        } message: {
-            Text("Your peer wants to pin this room. Pinned rooms persist across sessions and support offline messaging. Accept?")
-        }
-        .alert("Heart Rate", isPresented: Binding(
-            get: { viewModel.heartRateModeError != nil },
-            set: { if !$0 { viewModel.heartRateModeError = nil } }
-        )) {
-            Button("OK", role: .cancel) { viewModel.heartRateModeError = nil }
-        } message: {
-            Text(viewModel.heartRateModeError ?? "")
+        .onChange(of: viewModel.heartRateModeError) { newValue in
+            if let msg = newValue, activeAlert == nil { activeAlert = .heartRate(msg) }
         }
         .confirmationDialog("Send Image", isPresented: $showImageSourceDialog) {
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
@@ -160,7 +190,7 @@ struct ContentView: View {
                 Button(action: {
                     let url = "unspoken://\(viewModel.serverHost):\(viewModel.serverPort)/\(viewModel.roomId)"
                     UIPasteboard.general.string = url
-                    showCopySuccessAlert = true
+                    activeAlert = .copySuccess
                 }) {
                     Image(systemName: "link").foregroundColor(.white)
                 }
@@ -202,7 +232,7 @@ struct ContentView: View {
                         .padding(.horizontal, 8).padding(.vertical, 5)
                         .background(Color.orange.opacity(0.8)).cornerRadius(8)
                 }
-                Button(action: { showUnpinConfirm = true }) {
+                Button(action: { activeAlert = .unpinConfirm }) {
                     Image(systemName: "pin.slash")
                         .font(.system(size: 14))
                         .foregroundColor(.red.opacity(0.8))
@@ -218,12 +248,6 @@ struct ContentView: View {
         }
         .padding()
         .background(Color.black.opacity(0.2))
-        .alert("Unpin this room?", isPresented: $showUnpinConfirm) {
-            Button("Unpin", role: .destructive) { viewModel.unpinRoom() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This will permanently delete the room on both devices and the server, including any pending messages. This cannot be undone.")
-        }
     }
 
     // MARK: - Chat Messages
@@ -383,7 +407,7 @@ struct ContentView: View {
     }
 
     private func sendMessage() {
-        guard canSend(content: messageText) else { showBlockedWordAlert = true; return }
+        guard canSend(content: messageText) else { activeAlert = .blockedWord; return }
         if canSendMessage && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             viewModel.sendMessage(content: messageText, quotedMessage: quotedMessage)
             messageText = ""
