@@ -267,7 +267,7 @@ struct ContentView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 2) {
+                    VStack(spacing: 2) {
                         ForEach(viewModel.messages) { message in
                             MessageView(message: message, onReport: {
                                 viewModel.reportUser()
