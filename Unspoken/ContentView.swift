@@ -317,6 +317,7 @@ struct ContentView: View {
         .onChange(of: viewModel.peerBPM) { newBPM in
             if newBPM == nil { bgHeartScale = 1.0 }
         }
+        .simultaneousGesture(TapGesture().onEnded { isTextFieldFocused = false })
     }
 
     // MARK: - Input Area
