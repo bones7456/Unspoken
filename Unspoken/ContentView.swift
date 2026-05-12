@@ -50,6 +50,7 @@ struct ContentView: View {
     @State private var fullScreenImageItem: IdentifiableImage? = nil
     @State private var showMemeSearch: Bool = false
     @State private var quotedMessage: Message? = nil
+    @State private var typingDebounceTimer: Timer?
 
     var canSendMessage: Bool { viewModel.peerPublicKey != nil }
 
@@ -370,7 +371,11 @@ struct ContentView: View {
                     .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.3), lineWidth: 1))
                     .focused($isTextFieldFocused)
                     .onChange(of: messageText) { newValue in
-                        if canSendMessage { viewModel.sendTyping(content: newValue) }
+                        guard canSendMessage else { return }
+                        typingDebounceTimer?.invalidate()
+                        typingDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { _ in
+                            viewModel.sendTyping(content: newValue)
+                        }
                     }
                     .onSubmit { if canSendMessage { sendMessage() } }
                     .disabled(!canSendMessage)
