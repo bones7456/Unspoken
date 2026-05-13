@@ -33,6 +33,21 @@ private enum AppAlert: Identifiable {
     }
 }
 
+// MARK: - New Line menu action
+// UIMenuController (deprecated iOS 16 but still works) adds "New Line" to the
+// text-selection popup. The action is forwarded via NotificationCenter so the
+// UIKit responder chain doesn't need direct access to SwiftUI state.
+
+private extension Notification.Name {
+    static let insertNewLine = Notification.Name("Unspoken.insertNewLine")
+}
+
+extension UIResponder {
+    @objc func unspokenInsertNewLine(_ sender: Any?) {
+        NotificationCenter.default.post(name: .insertNewLine, object: nil)
+    }
+}
+
 // MARK: - ContentView
 
 struct ContentView: View {
@@ -51,6 +66,7 @@ struct ContentView: View {
     @State private var showMemeSearch: Bool = false
     @State private var quotedMessage: Message? = nil
     @State private var typingDebounceTimer: Timer?
+    @State private var insertingNewLine: Bool = false
 
     var canSendMessage: Bool { viewModel.peerPublicKey != nil }
 
@@ -319,6 +335,14 @@ struct ContentView: View {
             if newBPM == nil { bgHeartScale = 1.0 }
         }
         .simultaneousGesture(TapGesture().onEnded { isTextFieldFocused = false })
+        .onAppear {
+            UIMenuController.shared.menuItems = [
+                UIMenuItem(title: "New Line", action: #selector(UIResponder.unspokenInsertNewLine(_:)))
+            ]
+        }
+        .onDisappear {
+            UIMenuController.shared.menuItems = nil
+        }
     }
 
     // MARK: - Input Area
@@ -365,27 +389,43 @@ struct ContentView: View {
                 }
                 .disabled(!canSendMessage)
 
-                TextField(inputPlaceholder, text: $messageText)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Color.white.opacity(0.2)).cornerRadius(18)
-                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.3), lineWidth: 1))
-                    .focused($isTextFieldFocused)
-                    .onChange(of: messageText) { newValue in
-                        guard canSendMessage else { return }
-                        typingDebounceTimer?.invalidate()
-                        typingDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { _ in
-                            viewModel.sendTyping(content: newValue)
+                Group {
+                    if #available(iOS 16, *) {
+                        TextField(inputPlaceholder, text: $messageText, axis: .vertical)
+                            .lineLimit(1...2)
+                    } else {
+                        TextField(inputPlaceholder, text: $messageText)
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Color.white.opacity(0.2)).cornerRadius(18)
+                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.3), lineWidth: 1))
+                .focused($isTextFieldFocused)
+                .onChange(of: messageText) { newValue in
+                    if newValue.hasSuffix("\n") {
+                        if insertingNewLine {
+                            // \n came from the "New Line" toolbar button — keep it
+                            insertingNewLine = false
+                        } else {
+                            // \n came from the Return key — strip and send
+                            messageText = String(newValue.dropLast())
+                            if canSendMessage { sendMessage() }
+                            return
                         }
                     }
-                    .onSubmit { if canSendMessage { sendMessage() } }
-                    .disabled(!canSendMessage)
-
-                Button(action: clearMessage) {
-                    Image(systemName: "xmark.circle.fill").foregroundColor(.white)
-                        .frame(width: 36, height: 36)
-                        .background(Color.red.opacity(0.8)).clipShape(Circle())
+                    guard canSendMessage else { return }
+                    typingDebounceTimer?.invalidate()
+                    typingDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { _ in
+                        viewModel.sendTyping(content: newValue)
+                    }
                 }
-                .disabled(messageText.isEmpty || !canSendMessage)
+                .onSubmit { if canSendMessage { sendMessage() } }
+                .disabled(!canSendMessage)
+                .onReceive(NotificationCenter.default.publisher(for: .insertNewLine)) { _ in
+                    guard canSendMessage else { return }
+                    insertingNewLine = true
+                    messageText += "\n"
+                }
 
                 Button(action: sendMessage) {
                     Image(systemName: "paperplane.fill").foregroundColor(.white)
