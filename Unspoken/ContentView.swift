@@ -288,7 +288,7 @@ struct ContentView: View {
                         ForEach(viewModel.messages) { message in
                             MessageView(message: message, onReport: {
                                 viewModel.reportUser()
-                            }, showTimestamp: showTimestamps, onImageTap: { image in
+                            }, showReport: !viewModel.isPinned, showTimestamp: showTimestamps, onImageTap: { image in
                                 fullScreenImageItem = IdentifiableImage(image: image)
                             }, onQuote: {
                                 quotedMessage = message
@@ -297,8 +297,10 @@ struct ContentView: View {
                         }
                         if !viewModel.typingContent.isEmpty {
                             MessageView(
-                                message: Message(content: viewModel.typingContent, isFromMe: false, isTyping: true)
-                            ) { viewModel.reportUser() }
+                                message: Message(content: viewModel.typingContent, isFromMe: false, isTyping: true),
+                                onReport: { viewModel.reportUser() },
+                                showReport: !viewModel.isPinned
+                            )
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }

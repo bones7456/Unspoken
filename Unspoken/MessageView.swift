@@ -8,6 +8,7 @@ import SwiftUI
 struct MessageView: View {
     let message: Message
     let onReport: () -> Void
+    var showReport: Bool = true
     var showTimestamp: Bool = false
     var onImageTap: (UIImage) -> Void = { _ in }
     var onQuote: () -> Void = {}
@@ -147,7 +148,7 @@ struct MessageView: View {
                     Label("Quote", systemImage: "quote.bubble")
                 }
             }
-            if !message.isFromMe {
+            if !message.isFromMe && showReport {
                 Button(role: .destructive, action: onReport) {
                     Label("Report User", systemImage: "exclamationmark.triangle")
                 }
