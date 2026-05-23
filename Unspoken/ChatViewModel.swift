@@ -28,6 +28,8 @@ class ChatViewModel: ObservableObject {
     @Published var peerIsOnline: Bool = false
     @Published var pinRequestPending: Bool = false
     @Published var pinRequestReceived: Bool = false
+    @Published var pinnedRoomEntries: [PinnedRoomEntry] = []
+    @Published var isPinnedListUnlocked: Bool = false
     @Published var isHeartRateMode: Bool = false
     @Published var currentBPM: Int? = nil
     @Published var peerBPM: Int?
@@ -73,6 +75,7 @@ class ChatViewModel: ObservableObject {
             generateKeyPair()
             print("my userId:\(self.userId), Key pair generated.")
         }
+        migrateLegacyPinnedRoomIfNeeded()
         self.serverAddress = "wss://\(serverHost):\(serverPort)"
         setupWatchConnectivity()
         setupBackgroundTaskObservers()

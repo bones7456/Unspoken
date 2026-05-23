@@ -209,18 +209,23 @@ extension ChatViewModel: WebSocketDelegate {
                 self.messages.append(Message(content: "Pin request was declined.", isFromMe: false, isTyping: false, isSystem: true))
 
             case "room_unpinned":
-                self.clearPinnedRoom()
-                self.stopPeerHeartRate()
-                self.stopHeartRateMode(notifyPeer: false)
-                self.messages.append(Message(content: "Room has been unpinned by peer.", isFromMe: false, isTyping: false, isSystem: true))
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                    guard let self, self.isChatOpen else { return }
-                    self.isChatOpen = false
-                    self.roomId = ""
-                    self.role = ""
-                    self.messages = []
-                    self.peerPublicKey = nil
-                    self.peerUserId = nil
+                let unpinnedRoomId = (json["room_id"] as? String) ?? ""
+                if unpinnedRoomId.isEmpty || unpinnedRoomId == self.roomId {
+                    self.clearPinnedRoom()
+                    self.stopPeerHeartRate()
+                    self.stopHeartRateMode(notifyPeer: false)
+                    self.messages.append(Message(content: "Room has been unpinned by peer.", isFromMe: false, isTyping: false, isSystem: true))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                        guard let self, self.isChatOpen else { return }
+                        self.isChatOpen = false
+                        self.roomId = ""
+                        self.role = ""
+                        self.messages = []
+                        self.peerPublicKey = nil
+                        self.peerUserId = nil
+                    }
+                } else {
+                    self.removePinnedRoomFromStorage(roomId: unpinnedRoomId)
                 }
 
             case "peer_status":

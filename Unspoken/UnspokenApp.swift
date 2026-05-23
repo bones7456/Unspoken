@@ -61,7 +61,7 @@ struct RoomSelectionView: View {
     @State private var agreeToTerms = true
     @State private var isJoining = false
     @State private var isCreating = false
-    @State private var showForgetConfirmation = false
+    @State private var entryToForget: PinnedRoomEntry?
 
     var body: some View {
         GeometryReader { geometry in
@@ -76,61 +76,68 @@ struct RoomSelectionView: View {
                             .foregroundColor(.white)
                             .shadow(color: .black.opacity(0.2), radius: 2, x: 2, y: 2)
                             .onTapGesture(count: 2) {
-                                if chatViewModel.hasSavedPinnedRoom && !chatViewModel.isPinned {
+                                if chatViewModel.hasSavedPinnedRoom && !chatViewModel.isPinnedListUnlocked {
                                     chatViewModel.unlockPinnedRoom()
                                 }
                             }
 
-                        // Pinned room rejoin section (shown after Face ID unlock)
-                        if chatViewModel.isPinned {
-                            VStack(spacing: 15) {
-                                HStack {
-                                    Image(systemName: "pin.fill")
-                                        .foregroundColor(.yellow)
-                                    Text("Pinned Room: \(chatViewModel.roomId)")
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                }
+                        // Pinned rooms list (shown after Face ID unlock)
+                        if chatViewModel.isPinnedListUnlocked && !chatViewModel.pinnedRoomEntries.isEmpty {
+                            VStack(spacing: 16) {
+                                ForEach(chatViewModel.pinnedRoomEntries) { entry in
+                                    VStack(spacing: 15) {
+                                        HStack {
+                                            Image(systemName: "pin.fill")
+                                                .foregroundColor(.yellow)
+                                            Text("Pinned Room: \(entry.roomId)")
+                                                .font(.headline)
+                                                .foregroundColor(.white)
+                                        }
 
-                                Button(action: {
-                                    rejoinPinnedRoom()
-                                }) {
-                                    Text("Rejoin Pinned Room")
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(.white)
-                                        .padding()
-                                        .frame(width: min(250, geometry.size.width * 0.6), height: 50)
-                                        .background(Color.green.opacity(0.8))
-                                        .cornerRadius(10)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(Color.white, lineWidth: 2)
-                                        )
-                                }
+                                        Button(action: {
+                                            rejoinPinnedRoom(entry)
+                                        }) {
+                                            Text("Rejoin Pinned Room")
+                                                .fontWeight(.semibold)
+                                                .foregroundColor(.white)
+                                                .padding()
+                                                .frame(width: min(250, geometry.size.width * 0.6), height: 50)
+                                                .background(Color.green.opacity(0.8))
+                                                .cornerRadius(10)
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 10)
+                                                        .stroke(Color.white, lineWidth: 2)
+                                                )
+                                        }
 
-                                Button(action: {
-                                    showForgetConfirmation = true
-                                }) {
-                                    Text("Forget Pinned Room")
-                                        .font(.caption)
-                                        .foregroundColor(.white.opacity(0.7))
-                                }
-                                .alert("Forget Pinned Room?", isPresented: $showForgetConfirmation) {
-                                    Button("Forget", role: .destructive) {
-                                        chatViewModel.clearPinnedRoom()
+                                        Button(action: {
+                                            entryToForget = entry
+                                        }) {
+                                            Text("Forget Pinned Room")
+                                                .font(.caption)
+                                                .foregroundColor(.white.opacity(0.7))
+                                        }
                                     }
-                                    Button("Cancel", role: .cancel) {}
-                                } message: {
-                                    Text("This will remove all saved room data from this device. You won't be able to rejoin the pinned room.")
+                                    .padding()
+                                    .background(Color.white.opacity(0.15))
+                                    .cornerRadius(15)
+                                    .frame(maxWidth: min(300, geometry.size.width * 0.8))
                                 }
                             }
-                            .padding()
-                            .background(Color.white.opacity(0.15))
-                            .cornerRadius(15)
-                            .frame(maxWidth: min(300, geometry.size.width * 0.8))
+                            .alert(item: $entryToForget) { entry in
+                                Alert(
+                                    title: Text("Forget Pinned Room?"),
+                                    message: Text("This will remove room \(entry.roomId) from this device. You won't be able to rejoin it."),
+                                    primaryButton: .destructive(Text("Forget")) {
+                                        chatViewModel.removePinnedRoomFromStorage(roomId: entry.roomId)
+                                    },
+                                    secondaryButton: .cancel()
+                                )
+                            }
                         }
 
-                        if !chatViewModel.isPinned {
+                        let hidePrimaryControls = chatViewModel.isPinnedListUnlocked && !chatViewModel.pinnedRoomEntries.isEmpty
+                        if !hidePrimaryControls {
                             let cardWidth = min(geometry.size.width - 48, 340.0)
 
                             // Server settings card
@@ -328,7 +335,8 @@ struct RoomSelectionView: View {
         }
     }
 
-    private func rejoinPinnedRoom() {
+    private func rejoinPinnedRoom(_ entry: PinnedRoomEntry) {
+        guard chatViewModel.loadPinnedRoom(entry) else { return }
         chatViewModel.updateServerAddress(address: chatViewModel.serverHost, port: chatViewModel.serverPort)
         chatViewModel.joinRoom()
     }
