@@ -71,18 +71,28 @@ extension ChatViewModel {
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
             print("Biometrics unavailable: \(error?.localizedDescription ?? "Unknown")")
-            revealPinnedRoomsList()
+            unlockSucceeded()
             return
         }
         context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "Unlock your pinned rooms") { success, authError in
             DispatchQueue.main.async {
                 if success {
-                    self.revealPinnedRoomsList()
-                    print("Pinned rooms list unlocked")
+                    self.unlockSucceeded()
+                    print("Pinned rooms unlocked")
                 } else {
                     print("Biometric auth failed: \(authError?.localizedDescription ?? "Unknown")")
                 }
             }
+        }
+    }
+
+    /// Caller must be on the main thread. If a pinned chat is locked in memory, resume it
+    /// (preserving its messages); otherwise just expose the pinned rooms list for rejoining.
+    private func unlockSucceeded() {
+        if isLocked {
+            restoreLockedSession()
+        } else {
+            revealPinnedRoomsList()
         }
     }
 

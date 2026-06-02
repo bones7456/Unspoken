@@ -15,7 +15,7 @@ struct UnspokenApp: App {
     var body: some Scene {
         WindowGroup {
             NavigationView {
-                if chatViewModel.isChatOpen {
+                if chatViewModel.isChatOpen && !chatViewModel.isLocked {
                     ContentView()
                         .environmentObject(chatViewModel)
                 } else {

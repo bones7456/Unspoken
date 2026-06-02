@@ -37,6 +37,10 @@ class ChatViewModel: ObservableObject {
     @Published var peerLubTick: Int = 0
     @Published var peerDubTick: Int = 0
     @Published var isReconnecting: Bool = false
+    /// When a pinned-room chat is sent to the background, the chat UI is hidden (the login
+    /// screen is shown in its place, including in the app-switcher snapshot) while all
+    /// in-memory state — messages, peer keys, room metadata — is preserved. Face ID restores it.
+    @Published var isLocked: Bool = false
 
     private var socket: StarscreamWebSocket?
     var healthStore: HKHealthStore?
@@ -83,24 +87,78 @@ class ChatViewModel: ObservableObject {
     }
 
     private func setupBackgroundTaskObservers() {
+        // willResignActive fires before iOS captures the app-switcher snapshot, so hiding the
+        // chat here keeps the conversation out of that snapshot.
+        NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.lockPinnedRoomForPrivacy()
+        }
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             self?.didEnterBackground = true
             self?.beginHeartRateBackgroundTaskIfNeeded()
+            // A locked pinned session that genuinely backgrounded: drop the live connection so
+            // it can only be resumed via Face ID.
+            if let self, self.isLocked {
+                self.disconnectLockedSession()
+            }
         }
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.endHeartRateBackgroundTask()
-            guard let self, self.isChatOpen, !self.isUserLeft, self.didEnterBackground else { return }
+            guard let self else { return }
+            if self.isLocked {
+                // If we only briefly resigned active (Control Center, a banner) without actually
+                // backgrounding, the socket is still alive — restore silently, no Face ID needed.
+                // Otherwise stay locked and wait for the user to double-tap + Face ID.
+                if !self.didEnterBackground {
+                    self.isLocked = false
+                }
+                self.didEnterBackground = false
+                return
+            }
+            guard self.isChatOpen, !self.isUserLeft, self.didEnterBackground else { return }
             self.didEnterBackground = false
             self.reconnectAttempts = 0
             self.scheduleReconnect()
         }
     }
 
+    /// Privacy guard: when a pinned-room chat resigns active, hide the chat UI (the login screen
+    /// is shown in its place) and re-lock the pinned list so no room metadata leaks into the
+    /// app-switcher snapshot. All in-memory state is preserved for a later Face ID restore.
+    /// Non-pinned rooms keep the existing reconnect-on-foreground behavior.
+    private func lockPinnedRoomForPrivacy() {
+        guard isChatOpen, isPinned, !isUserLeft, !isLocked else { return }
+        isLocked = true
+        isPinnedListUnlocked = false
+        pinnedRoomEntries = []
+    }
+
+    /// Tear down the live connection for a locked pinned session without touching the preserved
+    /// conversation state (messages, peer keys, room metadata).
+    private func disconnectLockedSession() {
+        stopHeartRateMode(notifyPeer: false)
+        stopPeerHeartRate()
+        reconnectTimer?.invalidate()
+        isReconnecting = false
+        socket?.delegate = nil
+        socket?.disconnect()
+        isSocketConnected = false
+    }
+
+    /// Resume a locked pinned session after Face ID: reconnect and rejoin while keeping the
+    /// already-loaded messages on screen.
+    func restoreLockedSession() {
+        isLocked = false
+        didEnterBackground = false
+        reconnectAttempts = 0
+        joinRoom()
+        setupWebSocket()
+    }
+
     private func setupNetworkMonitor() {
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
             DispatchQueue.main.async {
-                guard let self, self.isChatOpen, !self.isUserLeft else { return }
+                guard let self, self.isChatOpen, !self.isUserLeft, !self.isLocked else { return }
                 if path.status == .satisfied {
                     if self.isReconnecting {
                         self.reconnectAttempts = 0
@@ -132,7 +190,7 @@ class ChatViewModel: ObservableObject {
     }
 
     func scheduleReconnect() {
-        guard isChatOpen, !isUserLeft else { return }
+        guard isChatOpen, !isUserLeft, !isLocked else { return }
         if !isReconnecting && !didShowDisconnectMessage {
             didShowDisconnectMessage = true
             addSystemMessage("Connection lost. Reconnecting...")
@@ -142,7 +200,7 @@ class ChatViewModel: ObservableObject {
         reconnectAttempts = min(reconnectAttempts + 1, 4)
         isReconnecting = true
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            guard let self, self.isChatOpen, !self.isUserLeft else { return }
+            guard let self, self.isChatOpen, !self.isUserLeft, !self.isLocked else { return }
             self.joinRoom()
             self.setupWebSocket()
         }
@@ -168,6 +226,7 @@ class ChatViewModel: ObservableObject {
 
     func createRoom() {
         isUserLeft = false
+        isLocked = false
         reconnectAttempts = 0
         pendingAction = { [weak self] in
             self?.sendLogin()
@@ -177,6 +236,7 @@ class ChatViewModel: ObservableObject {
 
     func joinRoom() {
         isUserLeft = false
+        isLocked = false
         pendingAction = { [weak self] in
             self?.sendLogin()
             var msg: [String: Any] = [
@@ -193,6 +253,7 @@ class ChatViewModel: ObservableObject {
 
     func leaveRoom() {
         isUserLeft = true
+        isLocked = false
         reconnectTimer?.invalidate()
         isReconnecting = false
         stopHeartRateMode()
