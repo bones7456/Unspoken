@@ -71,6 +71,10 @@ class ChatViewModel: ObservableObject {
     private var pathMonitor: NWPathMonitor?
     var isSocketConnected: Bool = false
     var didShowDisconnectMessage: Bool = false
+    // Set while reading the clipboard: the iOS 16+ "Allow Paste" alert briefly resigns active,
+    // which must NOT trigger the pinned-room privacy auto-lock (that would unmount the chat and
+    // tear down the image-confirm sheet). A genuine background still locks (see didEnterBackground).
+    private var suppressPasteLock: Bool = false
 
     init() {
         if loadKeyPair() {
@@ -90,20 +94,33 @@ class ChatViewModel: ObservableObject {
         // willResignActive fires before iOS captures the app-switcher snapshot, so hiding the
         // chat here keeps the conversation out of that snapshot.
         NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.lockPinnedRoomForPrivacy()
+            guard let self else { return }
+            // Skip the lock for the transient resign-active caused by the system paste alert.
+            if self.suppressPasteLock { return }
+            self.lockPinnedRoomForPrivacy()
         }
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.didEnterBackground = true
-            self?.beginHeartRateBackgroundTaskIfNeeded()
+            guard let self else { return }
+            self.didEnterBackground = true
+            // A genuine background while a paste prompt suppressed the resign-active lock: lock
+            // now so the Face ID gate still holds (snapshot of the messages stays covered by
+            // ScreenshotProtected meanwhile).
+            if self.suppressPasteLock {
+                self.suppressPasteLock = false
+                self.lockPinnedRoomForPrivacy()
+            }
+            self.beginHeartRateBackgroundTaskIfNeeded()
             // A locked pinned session that genuinely backgrounded: drop the live connection so
             // it can only be resumed via Face ID.
-            if let self, self.isLocked {
+            if self.isLocked {
                 self.disconnectLockedSession()
             }
         }
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.endHeartRateBackgroundTask()
             guard let self else { return }
+            // The paste alert (if any) is gone; stop suppressing the privacy lock.
+            self.suppressPasteLock = false
             if self.isLocked {
                 // If we only briefly resigned active (Control Center, a banner) without actually
                 // backgrounding, the socket is still alive — restore silently, no Face ID needed.
@@ -131,6 +148,13 @@ class ChatViewModel: ObservableObject {
         isPinnedListUnlocked = false
         pinnedRoomEntries = []
     }
+
+    /// Call right before reading `UIPasteboard` so the resulting "Allow Paste" alert's transient
+    /// resign-active doesn't trip the pinned-room privacy lock. Cleared on didBecomeActive, on a
+    /// genuine background, or via `endSystemPasteboardAccess()` when the paste flow is abandoned.
+    func beginSystemPasteboardAccess() { suppressPasteLock = true }
+
+    func endSystemPasteboardAccess() { suppressPasteLock = false }
 
     /// Tear down the live connection for a locked pinned session without touching the preserved
     /// conversation state (messages, peer keys, room metadata).

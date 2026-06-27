@@ -12,6 +12,71 @@ private struct IdentifiableImage: Identifiable {
     let image: UIImage
 }
 
+// MARK: - ActiveSheet
+// Single source of truth for every sheet on ContentView. Stacking multiple `.sheet`
+// modifiers on one view orphans the later presentation contexts — a sheet presented
+// from a third/fourth modifier gets torn down when an earlier presenter (e.g. the
+// confirmation dialog) finishes dismissing. Same lesson the alerts already learned.
+private enum ActiveSheet: Identifiable {
+    case imagePicker
+    case memeSearch
+    case confirmImage(IdentifiableImage)
+    case fullScreenImage(IdentifiableImage)
+
+    var id: String {
+        switch self {
+        case .imagePicker:              return "imagePicker"
+        case .memeSearch:               return "memeSearch"
+        case .confirmImage(let i):      return "confirm-\(i.id)"
+        case .fullScreenImage(let i):   return "full-\(i.id)"
+        }
+    }
+}
+
+// MARK: - ImageSendConfirmView
+// Second-step confirmation shown before an image is actually sent. Shared by every
+// image source (library, camera, meme, clipboard) so each send is double-confirmed.
+private struct ImageSendConfirmView: View {
+    let image: UIImage
+    let onCancel: () -> Void
+    let onSend: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Send this image?")
+                .font(.headline)
+                .padding(.top, 20)
+
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+
+            HStack(spacing: 12) {
+                Button(action: onCancel) {
+                    Text("Cancel")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color.gray.opacity(0.25))
+                        .foregroundColor(.primary)
+                        .cornerRadius(12)
+                }
+                Button(action: onSend) {
+                    Text("Send")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 20)
+        }
+    }
+}
+
 // MARK: - AppAlert
 // Single source of truth for all alerts on ContentView. Stacking multiple
 // `.alert` modifiers caused orphaned presentation contexts that froze the UI.
@@ -59,11 +124,11 @@ struct ContentView: View {
     @State private var showTimestamps: Bool = false
     @FocusState private var isTextFieldFocused: Bool
     @State private var showImageSourceDialog: Bool = false
-    @State private var showImagePicker: Bool = false
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
-    @State private var selectedImage: UIImage? = nil
-    @State private var fullScreenImageItem: IdentifiableImage? = nil
-    @State private var showMemeSearch: Bool = false
+    // The single sheet currently presented (picker / meme / confirm / fullscreen).
+    @State private var activeSheet: ActiveSheet? = nil
+    // Image awaiting the source sheet (picker / meme) to dismiss before the confirm sheet shows.
+    @State private var stagedImage: UIImage? = nil
     @State private var quotedMessage: Message? = nil
     @State private var typingDebounceTimer: Timer?
     @State private var insertingNewLine: Bool = false
@@ -129,50 +194,71 @@ struct ContentView: View {
         }
         .confirmationDialog("Send Image", isPresented: $showImageSourceDialog) {
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                Button("Take Photo") { imagePickerSource = .camera; showImagePicker = true }
+                Button("Take Photo") { imagePickerSource = .camera; activeSheet = .imagePicker }
             }
-            Button("Choose from Library") { imagePickerSource = .photoLibrary; showImagePicker = true }
-            Button("Send Meme") { showMemeSearch = true }
-            Button("Cancel", role: .cancel) {}
-        }
-        .sheet(isPresented: $showImagePicker, onDismiss: {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { isTextFieldFocused = true }
-        }) {
-            ImagePicker(sourceType: imagePickerSource) { image in
-                selectedImage = image
-                showImagePicker = false
-            }
-        }
-        .onChange(of: selectedImage) { image in
-            guard let image else { return }
-            selectedImage = nil
-            let captured = quotedMessage
-            quotedMessage = nil
-            DispatchQueue.global(qos: .userInitiated).async {
-                guard let data = processImageForSending(image) else { return }
-                DispatchQueue.main.async { viewModel.sendImage(data, quotedMessage: captured) }
-            }
-        }
-        .sheet(isPresented: $showMemeSearch) {
-            let captured = quotedMessage
-            MemeSearchView { image in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    guard let data = processImageForSending(image) else { return }
-                    DispatchQueue.main.async {
-                        viewModel.sendImage(data, quotedMessage: captured)
-                        quotedMessage = nil
+            Button("Choose from Library") { imagePickerSource = .photoLibrary; activeSheet = .imagePicker }
+            Button("Send Meme") { activeSheet = .memeSearch }
+            if UIPasteboard.general.hasImages {
+                Button("Send Clipboard Image") {
+                    // Reading the clipboard image triggers the system "Allow Paste" alert on
+                    // iOS 16+, which briefly resigns active. Tell the view model to skip the
+                    // pinned-room privacy auto-lock for that transient interruption, otherwise
+                    // the chat (and this confirm sheet) gets torn down. See ChatViewModel.
+                    viewModel.beginSystemPasteboardAccess()
+                    if let img = UIPasteboard.general.image {
+                        activeSheet = .confirmImage(IdentifiableImage(image: img))
+                    } else {
+                        viewModel.endSystemPasteboardAccess()
                     }
                 }
             }
+            Button("Cancel", role: .cancel) {}
         }
-        .sheet(item: $fullScreenImageItem) { item in
-            ScreenshotProtected {
-                ZStack {
-                    Color.black.ignoresSafeArea()
-                    Image(uiImage: item.image).resizable().scaledToFit()
-                }
+        // Single sheet modifier for every presentation. When a source sheet (picker / meme)
+        // dismisses with a staged image, onDismiss chains straight into the confirm sheet.
+        .sheet(item: $activeSheet, onDismiss: {
+            viewModel.endSystemPasteboardAccess()
+            if let img = stagedImage {
+                stagedImage = nil
+                activeSheet = .confirmImage(IdentifiableImage(image: img))
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { isTextFieldFocused = true }
             }
-            .ignoresSafeArea()
+        }) { sheet in
+            switch sheet {
+            case .imagePicker:
+                ImagePicker(sourceType: imagePickerSource) { image in
+                    stagedImage = image
+                    activeSheet = nil
+                }
+            case .memeSearch:
+                MemeSearchView { image in
+                    // onSend fires off the main thread; hop to main before touching SwiftUI state.
+                    DispatchQueue.main.async { stagedImage = image }
+                }
+            case .confirmImage(let item):
+                ImageSendConfirmView(
+                    image: item.image,
+                    onCancel: { activeSheet = nil },
+                    onSend: {
+                        let captured = quotedMessage
+                        quotedMessage = nil
+                        activeSheet = nil
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            guard let data = processImageForSending(item.image) else { return }
+                            DispatchQueue.main.async { viewModel.sendImage(data, quotedMessage: captured) }
+                        }
+                    }
+                )
+            case .fullScreenImage(let item):
+                ScreenshotProtected {
+                    ZStack {
+                        Color.black.ignoresSafeArea()
+                        Image(uiImage: item.image).resizable().scaledToFit()
+                    }
+                }
+                .ignoresSafeArea()
+            }
         }
     }
 
@@ -289,7 +375,7 @@ struct ContentView: View {
                             MessageView(message: message, onReport: {
                                 viewModel.reportUser()
                             }, showReport: !viewModel.isPinned, showTimestamp: showTimestamps, onImageTap: { image in
-                                fullScreenImageItem = IdentifiableImage(image: image)
+                                activeSheet = .fullScreenImage(IdentifiableImage(image: image))
                             }, onQuote: {
                                 quotedMessage = message
                                 isTextFieldFocused = true
