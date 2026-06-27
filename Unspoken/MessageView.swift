@@ -140,61 +140,79 @@ struct MessageView: View {
     }
 
     @ViewBuilder
-    private var messageBubble: some View {
-        let hasQuote = message.quote != nil
-        let sharedContextMenu = Group {
-            if !message.isTyping {
-                Button(action: onQuote) {
-                    Label("Quote", systemImage: "quote.bubble")
-                }
-            }
-            if !message.isFromMe && showReport {
-                Button(role: .destructive, action: onReport) {
-                    Label("Report User", systemImage: "exclamationmark.triangle")
-                }
+    private var sharedContextMenu: some View {
+        if !message.isTyping {
+            Button(action: onQuote) {
+                Label("Quote", systemImage: "quote.bubble")
             }
         }
+        if !message.isFromMe && showReport {
+            Button(role: .destructive, action: onReport) {
+                Label("Report User", systemImage: "exclamationmark.triangle")
+            }
+        }
+    }
+
+    // When Report is hidden (e.g. pinned rooms), Quote is the only menu action,
+    // so long-press fires it directly instead of showing a single-item menu.
+    @ViewBuilder
+    private func withMessageInteraction<V: View>(_ content: V) -> some View {
+        if showReport {
+            content.contextMenu { sharedContextMenu }
+        } else {
+            content.onLongPressGesture {
+                if !message.isTyping { onQuote() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var messageBubble: some View {
+        let hasQuote = message.quote != nil
 
         if hasQuote {
-            VStack(alignment: .leading, spacing: 0) {
-                quoteBlock
-                if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 200)
-                        .cornerRadius(6)
-                        .onTapGesture { onImageTap(uiImage) }
-                        .padding(6)
-                } else {
-                    Text(message.content)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .foregroundColor(.white)
+            withMessageInteraction(
+                VStack(alignment: .leading, spacing: 0) {
+                    quoteBlock
+                    if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 200)
+                            .cornerRadius(6)
+                            .onTapGesture { onImageTap(uiImage) }
+                            .padding(6)
+                    } else {
+                        Text(message.content)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .foregroundColor(.white)
+                    }
                 }
-            }
-            .background(bubbleColor)
-            .cornerRadius(10)
-            .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
-            .contextMenu { sharedContextMenu }
-        } else if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
-            Image(uiImage: uiImage)
-                .resizable()
-                .scaledToFit()
-                .frame(maxWidth: 220)
-                .cornerRadius(10)
-                .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
-                .onTapGesture { onImageTap(uiImage) }
-                .contextMenu { sharedContextMenu }
-        } else {
-            Text(message.content)
-                .padding(.vertical, 4)
-                .padding(.horizontal, 10)
                 .background(bubbleColor)
-                .foregroundColor(.white)
                 .cornerRadius(10)
                 .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
-                .contextMenu { sharedContextMenu }
+            )
+        } else if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
+            withMessageInteraction(
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 220)
+                    .cornerRadius(10)
+                    .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+                    .onTapGesture { onImageTap(uiImage) }
+            )
+        } else {
+            withMessageInteraction(
+                Text(message.content)
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 10)
+                    .background(bubbleColor)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                    .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+            )
         }
     }
 }
