@@ -108,6 +108,25 @@ def restore_pinned_rooms():
                     entry["next_id"] += 1
     save_pending_messages()
 
+async def send_next_pending(websocket, user_id, room_id, role):
+    """Send the head of the user's pending queue (stop-and-wait: next one goes out on ack)."""
+    queue_key = f"for_{role}"
+    queue = pending_messages.get(room_id, {}).get(queue_key, [])
+    if not queue:
+        return
+    msg = queue[0]
+    notification = json.dumps({
+        'action': 'pending_message',
+        'room_id': room_id,
+        'pending_msg_id': msg['pending_msg_id'],
+        'encrypted_aes_key': msg['encrypted_aes_key'],
+        'encrypted_content': msg['encrypted_content'],
+        'timestamp': msg.get('timestamp'),
+        'pending_count': len(queue) - 1
+    })
+    await websocket.send(notification)
+    log_message("SENT", user_id, f"Delivered pending msg {msg['pending_msg_id']} ({len(queue) - 1} remaining)")
+
 _TRUNCATE_KEYS = {"encrypted_content", "encrypted_aes_key", "public_key", "peer_public_key", "host_public_key", "guest_public_key"}
 _TRUNCATE_LEN = 16
 
@@ -254,24 +273,9 @@ async def handle_connection(websocket):
                         await websocket.send(response)
                         log_message("SENT", user_id, response)
 
-                        # Deliver pending messages one by one to avoid oversized frames
-                        queue_key = f"for_{rejoin_role}"
-                        if room_id in pending_messages and pending_messages[room_id][queue_key]:
-                            pending = pending_messages[room_id][queue_key]
-                            total = len(pending)
-                            for i, msg in enumerate(pending):
-                                remaining = total - i - 1
-                                notification = json.dumps({
-                                    'action': 'pending_message',
-                                    'room_id': room_id,
-                                    'pending_msg_id': msg['pending_msg_id'],
-                                    'encrypted_aes_key': msg['encrypted_aes_key'],
-                                    'encrypted_content': msg['encrypted_content'],
-                                    'timestamp': msg.get('timestamp'),
-                                    'pending_count': remaining
-                                })
-                                await websocket.send(notification)
-                            log_message("SENT", user_id, f"Delivered {total} pending messages, awaiting acks")
+                        # Deliver pending messages stop-and-wait: send only the first;
+                        # each pending_ack deletes it and triggers the next one.
+                        await send_next_pending(websocket, user_id, room_id, rejoin_role)
 
                         # If peer is online in this room, notify them
                         if peer_online and peer_user_id in connected_users:
@@ -581,6 +585,8 @@ async def handle_connection(websocket):
                     if len(pending_messages[room_id][queue_key]) < before:
                         save_pending_messages()
                         log_message("SYSTEM", "Server", f"Deleted pending msg {pending_msg_id} for {role} in room {room_id}")
+                        # Stop-and-wait: deliver the next queued message, if any
+                        await send_next_pending(websocket, user_id, room_id, role)
 
             elif action == 'report_user':
                 reported_id = data.get('reported_user_id')
