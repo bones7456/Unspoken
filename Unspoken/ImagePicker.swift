@@ -6,6 +6,7 @@
 import SwiftUI
 import UIKit
 import ImageIO
+import PhotosUI
 
 // MARK: - ImagePicker
 
@@ -40,6 +41,58 @@ struct ImagePicker: UIViewControllerRepresentable {
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
             picker.dismiss(animated: true)
+        }
+    }
+}
+
+// MARK: - MultiImagePicker
+// PHPicker-based library picker with ordered multi-select (numbered 1, 2, 3… badges).
+// Calls onImages with the picked images in selection order; empty array on cancel.
+
+struct MultiImagePicker: UIViewControllerRepresentable {
+    let onImages: ([UIImage]) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onImages: onImages) }
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.filter = .images
+        config.selectionLimit = 0
+        config.selection = .ordered
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+
+    class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let onImages: ([UIImage]) -> Void
+        init(onImages: @escaping ([UIImage]) -> Void) { self.onImages = onImages }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            guard !results.isEmpty else {
+                onImages([])
+                return
+            }
+            // Item providers load asynchronously on arbitrary threads; collect into
+            // fixed slots under a lock so selection order is preserved.
+            var loaded = [UIImage?](repeating: nil, count: results.count)
+            let lock = NSLock()
+            let group = DispatchGroup()
+            for (index, result) in results.enumerated()
+            where result.itemProvider.canLoadObject(ofClass: UIImage.self) {
+                group.enter()
+                result.itemProvider.loadObject(ofClass: UIImage.self) { object, _ in
+                    lock.lock()
+                    loaded[index] = object as? UIImage
+                    lock.unlock()
+                    group.leave()
+                }
+            }
+            group.notify(queue: .main) {
+                self.onImages(loaded.compactMap { $0 })
+            }
         }
     }
 }

@@ -12,6 +12,12 @@ private struct IdentifiableImage: Identifiable {
     let image: UIImage
 }
 
+// Batch of images awaiting send confirmation, in the order the user picked them.
+private struct IdentifiableImages: Identifiable {
+    let id = UUID()
+    let images: [UIImage]
+}
+
 // MARK: - ActiveSheet
 // Single source of truth for every sheet on ContentView. Stacking multiple `.sheet`
 // modifiers on one view orphans the later presentation contexts — a sheet presented
@@ -20,7 +26,7 @@ private struct IdentifiableImage: Identifiable {
 private enum ActiveSheet: Identifiable {
     case imagePicker
     case memeSearch
-    case confirmImage(IdentifiableImage)
+    case confirmImage(IdentifiableImages)
     case fullScreenImage(IdentifiableImage)
 
     var id: String {
@@ -37,21 +43,34 @@ private enum ActiveSheet: Identifiable {
 // Second-step confirmation shown before an image is actually sent. Shared by every
 // image source (library, camera, meme, clipboard) so each send is double-confirmed.
 private struct ImageSendConfirmView: View {
-    let image: UIImage
+    let images: [UIImage]
     let onCancel: () -> Void
     let onSend: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("Send this image?")
+            Text(images.count > 1 ? "Send \(images.count) images?" : "Send this image?")
                 .font(.headline)
                 .padding(.top, 20)
 
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
+            if images.count > 1 {
+                TabView {
+                    ForEach(images.indices, id: \.self) { i in
+                        Image(uiImage: images[i])
+                            .resizable()
+                            .scaledToFit()
+                            .padding()
+                    }
+                }
+                .tabViewStyle(.page)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding()
+            } else {
+                Image(uiImage: images[0])
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+            }
 
             HStack(spacing: 12) {
                 Button(action: onCancel) {
@@ -127,8 +146,8 @@ struct ContentView: View {
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
     // The single sheet currently presented (picker / meme / confirm / fullscreen).
     @State private var activeSheet: ActiveSheet? = nil
-    // Image awaiting the source sheet (picker / meme) to dismiss before the confirm sheet shows.
-    @State private var stagedImage: UIImage? = nil
+    // Images awaiting the source sheet (picker / meme) to dismiss before the confirm sheet shows.
+    @State private var stagedImages: [UIImage] = []
     @State private var quotedMessage: Message? = nil
     @State private var typingDebounceTimer: Timer?
     @State private var insertingNewLine: Bool = false
@@ -206,7 +225,7 @@ struct ContentView: View {
                     // the chat (and this confirm sheet) gets torn down. See ChatViewModel.
                     viewModel.beginSystemPasteboardAccess()
                     if let img = UIPasteboard.general.image {
-                        activeSheet = .confirmImage(IdentifiableImage(image: img))
+                        activeSheet = .confirmImage(IdentifiableImages(images: [img]))
                     } else {
                         viewModel.endSystemPasteboardAccess()
                     }
@@ -218,35 +237,47 @@ struct ContentView: View {
         // dismisses with a staged image, onDismiss chains straight into the confirm sheet.
         .sheet(item: $activeSheet, onDismiss: {
             viewModel.endSystemPasteboardAccess()
-            if let img = stagedImage {
-                stagedImage = nil
-                activeSheet = .confirmImage(IdentifiableImage(image: img))
+            if !stagedImages.isEmpty {
+                let imgs = stagedImages
+                stagedImages = []
+                activeSheet = .confirmImage(IdentifiableImages(images: imgs))
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { isTextFieldFocused = true }
             }
         }) { sheet in
             switch sheet {
             case .imagePicker:
-                ImagePicker(sourceType: imagePickerSource) { image in
-                    stagedImage = image
-                    activeSheet = nil
+                if imagePickerSource == .camera {
+                    ImagePicker(sourceType: .camera) { image in
+                        stagedImages = [image]
+                        activeSheet = nil
+                    }
+                } else {
+                    MultiImagePicker { images in
+                        stagedImages = images
+                        activeSheet = nil
+                    }
                 }
             case .memeSearch:
                 MemeSearchView { image in
                     // onSend fires off the main thread; hop to main before touching SwiftUI state.
-                    DispatchQueue.main.async { stagedImage = image }
+                    DispatchQueue.main.async { stagedImages = [image] }
                 }
             case .confirmImage(let item):
                 ImageSendConfirmView(
-                    image: item.image,
+                    images: item.images,
                     onCancel: { activeSheet = nil },
                     onSend: {
                         let captured = quotedMessage
                         quotedMessage = nil
                         activeSheet = nil
                         DispatchQueue.global(qos: .userInitiated).async {
-                            guard let data = processImageForSending(item.image) else { return }
-                            DispatchQueue.main.async { viewModel.sendImage(data, quotedMessage: captured) }
+                            // Send one by one, in selection order; only the first carries the quote.
+                            for (index, image) in item.images.enumerated() {
+                                guard let data = processImageForSending(image) else { continue }
+                                let quote = index == 0 ? captured : nil
+                                DispatchQueue.main.async { viewModel.sendImage(data, quotedMessage: quote) }
+                            }
                         }
                     }
                 )
