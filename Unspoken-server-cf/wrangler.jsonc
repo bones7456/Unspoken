@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "unspoken-server",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "un.luy.li", "custom_domain": true }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SERVER", "class_name": "UnspokenServer" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["UnspokenServer"] }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

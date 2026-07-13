@@ -7,6 +7,11 @@ This document provides developers with technical details about the client-server
 
 Unspoken adopts a client-server architecture. Clients (iOS/Web) establish secure connections with the server through WebSocket and perform real-time message exchange. The server is responsible for handling core logic including user login, room creation and management, message routing, and user reporting.
 
+Two protocol-compatible server implementations exist:
+
+- **`Unspoken-server/unspoken.py`** — the original Python server (self-hosted VPS, `wss://host:8765`).
+- **`Unspoken-server-cf/`** — a Cloudflare Workers + Durable Objects port (TypeScript, `wss://un.luy.li`, port 443). All actions, response fields, and error strings are identical; `test/protocol-test.mjs` verifies parity against both implementations.
+
 ## 2. Communication Protocol
 
 The client and server communicate using secure WebSocket (WSS) protocol for full-duplex communication. All transmitted data is in JSON format.

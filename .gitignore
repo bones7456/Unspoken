@@ -10,3 +10,7 @@ DerivedData/
 
 # Python
 __pycache__/
+
+# Cloudflare Workers server
+Unspoken-server-cf/node_modules/
+Unspoken-server-cf/.wrangler/

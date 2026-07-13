@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Unspoken is an end-to-end encrypted anonymous chat app. This is a mono-repo containing:
 - **Unspoken/** — iOS native client (SwiftUI, the primary project)
-- **Unspoken-server/** — Python WebSocket server (~600 LOC, single file `unspoken.py`)
+- **Unspoken-server/** — Python WebSocket server (~700 LOC, single file `unspoken.py`)
+- **Unspoken-server-cf/** — Cloudflare Workers + Durable Objects server (TypeScript, protocol-compatible port of `unspoken.py`)
 - **Unspoken-web/** — Web client (HTML/JS)
 
 ## Build & Run
@@ -26,12 +27,22 @@ xcodebuild -project Unspoken.xcodeproj -scheme Unspoken -sdk iphonesimulator bui
 - **Bundle ID:** `Senob.Unspoken`
 - **No test targets exist** currently
 
-### Server
+### Server (Python, original)
 ```bash
 cd Unspoken-server
 python3 unspoken.py
 ```
 Requires `websockets` and `cryptography` packages. Listens on `0.0.0.0:8765` with TLS (cert paths hardcoded for production).
+
+### Server (Cloudflare Workers + Durable Objects)
+```bash
+cd Unspoken-server-cf
+npm install
+npm run dev      # local dev at ws://localhost:8787
+npm test         # protocol integration test (pass a URL to target another server)
+npm run deploy   # deploy to Cloudflare (custom domain: un.luy.li, wss on port 443)
+```
+See "Cloudflare Server" section below for architecture.
 
 ## Architecture
 
@@ -48,6 +59,19 @@ Requires `websockets` and `cryptography` packages. Listens on `0.0.0.0:8765` wit
 - `handle_connection()` dispatches all WebSocket actions in a single async for-loop
 - `cleanup_user()` handles disconnect cleanup (pinned rooms survive, non-pinned rooms get deleted)
 - Persistence files in `data/`: `blocked_users.json`, `pinned_rooms.json`, `pending_messages.json`
+
+### Cloudflare Server (`Unspoken-server-cf/`)
+
+Protocol-compatible TypeScript port of `unspoken.py`. `unspoken.py` is the spec — all actions, response fields, and error strings must stay identical between the two.
+
+- **Deliberately a single Durable Object instance** (`idFromName("main")`, see `src/index.ts`) so room ids stay server-generated and the iOS client needs no changes. This trades away per-room horizontal scaling — equivalent to the original single-VPS model, fine at this app's scale (~1,000 req/s soft limit per DO).
+- **`src/server.ts`** — `UnspokenServer` DO class. Uses the WebSocket **Hibernation API** (`ctx.acceptWebSocket`), so DO memory is wiped whenever the object sleeps. Therefore no authoritative in-memory state exists:
+  - Connection-scoped state (Python's `connected_users`/`rooms`/`room_role_to_userid`) lives in each socket's **attachment** `{userId, publicKey, rooms: [{roomId, role}]}` and is derived on demand by scanning `ctx.getWebSockets()`.
+  - Durable state (Python's `data/*.json`) lives in DO **SQLite**: `blocked_users`, `pinned_rooms`, `pending_meta`/`pending_chunks`/`pending_counter`, `meta` (next_room_id).
+- **Pending message chunking**: offline-queued messages (up to 5 MB base64 images) are split into 1,000,000-char rows in `pending_chunks` because SQLite rows cap at 2 MB; reassembled on delivery. Live relay never touches storage.
+- **Non-pinned room lifetime == host socket lifetime** (room refs die with their attachments), which matches Python semantics exactly and needs no cleanup sweeps.
+- **`test/protocol-test.mjs`** — integration test (17 steps, ~50 assertions) covering the full protocol including pin flow, stop-and-wait pending delivery, chunking, key-mismatch rejection, and report/block. Run it against both servers when changing either: `node test/protocol-test.mjs ws://localhost:8787` (wrangler dev) and `ws://localhost:8766` (`uv run unspoken.py --no-ssl --port 8766`).
+- **Deploy**: `npm run deploy`. Custom domain `un.luy.li` (requires the `luy.li` zone on Cloudflare DNS). Client connects with Address=`un.luy.li`, Port=`443`, SSL on — note Cloudflare cannot serve port 8765.
 
 ## Encryption
 
