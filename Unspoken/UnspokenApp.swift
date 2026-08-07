@@ -269,6 +269,14 @@ struct RoomSelectionView: View {
                 isRoomSelected = true
             }
         }
+        // A rejoin the server refused (the pinned room is gone) surfaces here instead of the
+        // card just silently disappearing.
+        .onReceive(chatViewModel.$joinError) { error in
+            guard let error else { return }
+            errorMessage = error
+            isJoining = false
+            chatViewModel.joinError = nil
+        }
     }
 
     @ViewBuilder

@@ -8,6 +8,7 @@
 import asyncio
 import websockets
 import json
+import time
 import uuid
 import ssl
 from datetime import datetime
@@ -21,8 +22,16 @@ connected_users = {} # 存储用户连接
 rooms = {} # 存储房间信息
 user_public_keys = {}  # 存储用户公钥
 room_role_to_userid = {}  # 存储 room+role 和 userid 的对应关系
-pinned_rooms = {}  # { room_id: { host_user_id, guest_user_id, host_public_key, guest_public_key } }
+# { room_id: { host_user_id, guest_user_id, host_public_key, guest_public_key,
+#              unpinned_by?, destroy_after? } }
+# unpinned_by/destroy_after are only present while a room is "dying" — see is_dying().
+pinned_rooms = {}
 pending_messages = {}  # { room_id: { "for_host": [...], "for_guest": [...] } }
+
+# How long an unpinned room survives read-only so the other side can still read the last
+# messages (and drain its pending queue) before everything is destroyed. Overridable for tests.
+UNPIN_GRACE_SECONDS = int(os.environ.get('UNSPOKEN_UNPIN_GRACE_SECONDS', 7 * 24 * 3600))
+PURGE_INTERVAL_SECONDS = 600
 
 # 确保存储目录存在
 os.makedirs('data', exist_ok=True)
@@ -69,6 +78,41 @@ def save_pending_messages():
 
 def is_pinned(room_id):
     return room_id in pinned_rooms
+
+def is_dying(room_id):
+    """True for a room unpinned with grace: kept read-only until destroy_after passes."""
+    return pinned_rooms.get(room_id, {}).get('destroy_after') is not None
+
+def iso_utc(ts):
+    return datetime.utcfromtimestamp(ts).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+def destroy_room(room_id):
+    """Erase every trace of a room: pinned entry, pending queue, live room, role mappings."""
+    pinned_rooms.pop(room_id, None)
+    pending_messages.pop(room_id, None)
+    rooms.pop(room_id, None)
+    for r in ('host', 'guest'):
+        room_role_to_userid.pop(f"{room_id}:{r}", None)
+    save_pinned_rooms()
+    save_pending_messages()
+
+def purge_room_if_expired(room_id):
+    """Destroy a dying room whose grace period has run out. Returns True if it was destroyed."""
+    info = pinned_rooms.get(room_id)
+    if info and info.get('destroy_after') is not None and info['destroy_after'] <= time.time():
+        destroy_room(room_id)
+        log_message("SYSTEM", "Server", f"Room {room_id} grace period expired, destroyed")
+        return True
+    return False
+
+def purge_expired_rooms():
+    for room_id in list(pinned_rooms.keys()):
+        purge_room_if_expired(room_id)
+
+async def purge_expired_rooms_loop():
+    while True:
+        await asyncio.sleep(PURGE_INTERVAL_SECONDS)
+        purge_expired_rooms()
 
 def restore_pinned_rooms():
     """On startup, restore pinned rooms into the rooms dict."""
@@ -220,6 +264,9 @@ async def handle_connection(websocket):
                     log_message("SYSTEM", "Server", f"Blocked user {user_id} attempted to join room")
                     continue
                 room_id = data['room_id']
+                # A dying room whose grace period elapsed is destroyed here, so the rejoin
+                # falls through to the regular "Room not found" answer below.
+                purge_room_if_expired(room_id)
 
                 # Pinned room rejoin
                 if is_pinned(room_id):
@@ -230,6 +277,16 @@ async def handle_connection(websocket):
                         rejoin_role = 'host'
                     elif pin_info['guest_user_id'] == user_id:
                         rejoin_role = 'guest'
+
+                    if rejoin_role and rejoin_role == pin_info.get('unpinned_by'):
+                        # The side that unpinned it doesn't get to come back during the grace period.
+                        error_message = json.dumps({
+                            'action': 'error',
+                            'message': 'You unpinned this room.'
+                        })
+                        await websocket.send(error_message)
+                        log_message("SENT", user_id, error_message)
+                        continue
 
                     if rejoin_role:
                         # Reject rejoin if client presents a different public key —
@@ -254,12 +311,14 @@ async def handle_connection(websocket):
                         other_role = 'guest' if rejoin_role == 'host' else 'host'
                         peer_user_id = pin_info[f'{other_role}_user_id']
                         peer_public_key = pin_info[f'{other_role}_public_key']
-                        peer_online = peer_user_id in connected_users and rooms[room_id][other_role] is not None
+                        dying = is_dying(room_id)
+                        # A dying room's peer unpinned and is never coming back: always offline.
+                        peer_online = (not dying) and peer_user_id in connected_users and rooms[room_id][other_role] is not None
 
                         # Send room_joined to the rejoining user
                         queue_key_preview = f"for_{rejoin_role}"
                         pending_count = len(pending_messages.get(room_id, {}).get(queue_key_preview, []))
-                        response = json.dumps({
+                        payload = {
                             'action': 'room_joined',
                             'room_id': room_id,
                             'role': rejoin_role,
@@ -269,7 +328,11 @@ async def handle_connection(websocket):
                             'pinned': True,
                             'peer_status': 'online' if peer_online else 'offline',
                             'pending_count': pending_count
-                        })
+                        }
+                        if dying:
+                            payload['unpinned'] = True
+                            payload['grace_until'] = iso_utc(pin_info['destroy_after'])
+                        response = json.dumps(payload)
                         await websocket.send(response)
                         log_message("SENT", user_id, response)
 
@@ -429,7 +492,9 @@ async def handle_connection(websocket):
                 role = data['role']
                 encrypted_aes_key = data['encrypted_aes_key']
                 encrypted_content = data['encrypted_content']
-                if room_id in rooms:
+                # A dying room is read-only: drop silently (still acked below) rather than
+                # queueing for a peer who unpinned and will never come back.
+                if room_id in rooms and not is_dying(room_id):
                     other_role = 'guest' if role == 'host' else 'host'
                     other_user_id = rooms[room_id][other_role]
                     if other_user_id and other_user_id in connected_users:
@@ -540,33 +605,47 @@ async def handle_connection(websocket):
             elif action == 'unpin_room':
                 room_id = data['room_id']
                 role = data['role']
+                # 'grace' is opt-in: an unpin without it destroys everything immediately, which
+                # keeps the report flow (and older clients) on the original semantics.
+                grace = bool(data.get('grace'))
                 if is_pinned(room_id):
                     pin_info = pinned_rooms[room_id]
-                    # Notify peer
                     other_role = 'guest' if role == 'host' else 'host'
                     peer_user_id = pin_info[f'{other_role}_user_id']
-                    if peer_user_id and peer_user_id in connected_users:
-                        notification = json.dumps({
-                            'action': 'room_unpinned',
-                            'room_id': room_id
-                        })
-                        await connected_users[peer_user_id].send(notification)
-                        log_message("SENT", peer_user_id, notification)
+                    already_dying = is_dying(room_id)
 
-                    # Clean up
-                    del pinned_rooms[room_id]
-                    if room_id in pending_messages:
-                        del pending_messages[room_id]
-                    if room_id in rooms:
-                        del rooms[room_id]
-                    # Clean up role mappings
-                    for r in ['host', 'guest']:
-                        key = f"{room_id}:{r}"
-                        if key in room_role_to_userid:
-                            del room_role_to_userid[key]
-                    save_pinned_rooms()
-                    save_pending_messages()
-                    log_message("SYSTEM", "Server", f"Room {room_id} unpinned")
+                    if grace and not already_dying:
+                        # Keep the room alive read-only so the peer can still read the last
+                        # messages and drain its pending queue before it is destroyed.
+                        destroy_after = time.time() + UNPIN_GRACE_SECONDS
+                        pin_info['unpinned_by'] = role
+                        pin_info['destroy_after'] = destroy_after
+                        # The unpinner is no longer an occupant of the room.
+                        if room_id in rooms and rooms[room_id].get(role) == user_id:
+                            rooms[room_id][role] = None
+                        room_role_to_userid.pop(f"{room_id}:{role}", None)
+                        save_pinned_rooms()
+                        if peer_user_id and peer_user_id in connected_users:
+                            notification = json.dumps({
+                                'action': 'room_unpinned',
+                                'room_id': room_id,
+                                'grace_until': iso_utc(destroy_after)
+                            })
+                            await connected_users[peer_user_id].send(notification)
+                            log_message("SENT", peer_user_id, notification)
+                        log_message("SYSTEM", "Server", f"Room {room_id} unpinned by {role}, grace until {iso_utc(destroy_after)}")
+                    else:
+                        # Immediate destroy. When the room was already dying this is the
+                        # surviving peer closing it — the unpinner is gone, nobody to notify.
+                        if not already_dying and peer_user_id and peer_user_id in connected_users:
+                            notification = json.dumps({
+                                'action': 'room_unpinned',
+                                'room_id': room_id
+                            })
+                            await connected_users[peer_user_id].send(notification)
+                            log_message("SENT", peer_user_id, notification)
+                        destroy_room(room_id)
+                        log_message("SYSTEM", "Server", f"Room {room_id} unpinned")
 
             elif action == 'pending_ack':
                 room_id = data['room_id']
@@ -705,11 +784,16 @@ if __name__ == '__main__':
         # Load persistence on startup
         load_pinned_rooms()
         load_pending_messages()
+        purge_expired_rooms()   # drop rooms whose grace period elapsed while we were down
         restore_pinned_rooms()
         mode = "ws" if ssl_context is None else "wss"
         log_message("SYSTEM", "Server", f"Loaded {len(pinned_rooms)} pinned rooms")
         log_message("SYSTEM", "Server", f"Starting server at {mode}://{HOST}:{PORT}")
-        async with websockets.serve(handle_connection, HOST, PORT, ssl=ssl_context, max_size=10*1024*1024):
-            await asyncio.Future()  # 运行直到被取消
+        purge_task = asyncio.create_task(purge_expired_rooms_loop())
+        try:
+            async with websockets.serve(handle_connection, HOST, PORT, ssl=ssl_context, max_size=10*1024*1024):
+                await asyncio.Future()  # 运行直到被取消
+        finally:
+            purge_task.cancel()
 
     asyncio.run(main())

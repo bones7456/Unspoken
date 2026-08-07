@@ -105,7 +105,6 @@ private enum AppAlert: Identifiable {
     case pinRequest
     case heartRate(String)
     case voice(String)
-    case unpinConfirm
 
     var id: String {
         switch self {
@@ -114,7 +113,6 @@ private enum AppAlert: Identifiable {
         case .pinRequest:   return "pinRequest"
         case .heartRate:    return "heartRate"
         case .voice:        return "voice"
-        case .unpinConfirm: return "unpinConfirm"
         }
     }
 }
@@ -153,6 +151,7 @@ struct ContentView: View {
     @State private var quotedMessage: Message? = nil
     @State private var typingDebounceTimer: Timer?
     @State private var insertingNewLine: Bool = false
+    @State private var showUnpinDialog: Bool = false
 
     var canSendMessage: Bool { viewModel.peerPublicKey != nil }
     // Voice works when the peer is online (walkie-talkie) or, in a pinned room, offline
@@ -169,7 +168,11 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     chatHeader
                     ScreenshotProtected { chatMessages }
-                    inputArea
+                    if viewModel.isFarewell {
+                        farewellBar
+                    } else {
+                        inputArea
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -207,14 +210,14 @@ struct ContentView: View {
                     message: Text(msg),
                     dismissButton: .default(Text("OK")) { viewModel.voiceError = nil }
                 )
-            case .unpinConfirm:
-                return Alert(
-                    title: Text("Unpin this room?"),
-                    message: Text("This will permanently delete the room on both devices and the server, including any pending messages. This cannot be undone."),
-                    primaryButton: .destructive(Text("Unpin")) { viewModel.unpinRoom() },
-                    secondaryButton: .cancel()
-                )
             }
+        }
+        .confirmationDialog("Unpin this room?", isPresented: $showUnpinDialog, titleVisibility: .visible) {
+            Button("Unpin", role: .destructive) { viewModel.unpinRoom(grace: true) }
+            Button("Unpin & erase now", role: .destructive) { viewModel.unpinRoom() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Unpin leaves your peer 7 days to read the last messages, then everything is destroyed on both devices and the server. Erase now destroys everything immediately, including undelivered messages.")
         }
         .onChange(of: viewModel.pinRequestReceived) { newValue in
             if newValue && activeAlert == nil { activeAlert = .pinRequest }
@@ -311,22 +314,26 @@ struct ContentView: View {
 
     var chatHeader: some View {
         HStack {
-            if viewModel.isPinned {
+            if viewModel.isFarewell {
+                Image(systemName: "pin.slash").foregroundColor(.white.opacity(0.5)).font(.caption)
+            } else if viewModel.isPinned {
                 Image(systemName: "pin.fill").foregroundColor(.yellow).font(.caption)
             }
-            if viewModel.isReconnecting {
+            if viewModel.isFarewell {
+                Text("Room: \(viewModel.roomId) · Ended").font(.headline).foregroundColor(.white.opacity(0.7))
+            } else if viewModel.isReconnecting {
                 Text("Reconnecting...").font(.headline).foregroundColor(.yellow)
             } else {
                 Text("Room: \(viewModel.roomId)").font(.headline).foregroundColor(.white)
             }
-            if viewModel.isPinned {
+            if viewModel.isPinned && !viewModel.isFarewell {
                 Circle()
                     .fill(viewModel.peerIsOnline ? Color.green : Color.gray)
                     .frame(width: 8, height: 8)
             }
             Spacer()
 
-            if !viewModel.isPinned && viewModel.peerPublicKey != nil {
+            if !viewModel.isPinned && !viewModel.isFarewell && viewModel.peerPublicKey != nil {
                 Button(action: { viewModel.requestPin() }) {
                     Image(systemName: "pin")
                         .foregroundColor(viewModel.pinRequestPending ? .gray : .white)
@@ -334,7 +341,7 @@ struct ContentView: View {
                 .disabled(viewModel.pinRequestPending)
             }
 
-            if viewModel.role == "host" && !viewModel.isPinned {
+            if viewModel.role == "host" && !viewModel.isPinned && !viewModel.isFarewell {
                 Button(action: {
                     let url = "unspoken://\(viewModel.serverHost):\(viewModel.serverPort)/\(viewModel.roomId)"
                     UIPasteboard.general.string = url
@@ -374,13 +381,21 @@ struct ContentView: View {
 
             Spacer().frame(width: 12)
 
-            if viewModel.isPinned {
+            if viewModel.isFarewell {
+                Button(action: { viewModel.dismissFarewell() }) {
+                    Text("Close").foregroundColor(.white)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.red.opacity(0.8)).cornerRadius(8)
+                }
+                .disabled(viewModel.farewellDraining)
+                .opacity(viewModel.farewellDraining ? 0.5 : 1)
+            } else if viewModel.isPinned {
                 Button(action: { viewModel.leaveRoom() }) {
                     Text("Leave").foregroundColor(.white)
                         .padding(.horizontal, 8).padding(.vertical, 5)
                         .background(Color.orange.opacity(0.8)).cornerRadius(8)
                 }
-                Button(action: { activeAlert = .unpinConfirm }) {
+                Button(action: { showUnpinDialog = true }) {
                     Image(systemName: "pin.slash")
                         .font(.system(size: 14))
                         .foregroundColor(.red.opacity(0.8))
@@ -611,6 +626,55 @@ struct ContentView: View {
             .padding(.horizontal, 12).padding(.vertical, 8)
         }
         .background(Color.black.opacity(0.1))
+    }
+
+    // MARK: - Farewell Bar
+
+    /// Replaces the input bar once the room has ended: nothing to send, one way out.
+    var farewellBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: viewModel.farewellDraining ? "arrow.down.circle" : "lock.fill")
+                .foregroundColor(.white.opacity(0.8))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(farewellTitle)
+                    .font(.caption.bold())
+                    .foregroundColor(.white.opacity(0.9))
+                Text(farewellSubtitle)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 4)
+            Button(action: { viewModel.dismissFarewell() }) {
+                Text("Close")
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Color.red.opacity(0.8)).cornerRadius(10)
+            }
+            .disabled(viewModel.farewellDraining)
+            .opacity(viewModel.farewellDraining ? 0.5 : 1)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color.black.opacity(0.25))
+    }
+
+    private var farewellTitle: String {
+        if viewModel.farewellDraining { return "Delivering the last messages…" }
+        return viewModel.farewell == .hostClosed ? "The host closed this room." : "Your peer unpinned this room."
+    }
+
+    private var farewellSubtitle: String {
+        if viewModel.farewellDraining {
+            return "Hang on — the room closes when you're done reading."
+        }
+        if let until = viewModel.farewellGraceUntil {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .short
+            return "These messages live only on this screen. Closing erases them — and so does \(formatter.string(from: until))."
+        }
+        return "These messages live only on this screen. They are erased when you close."
     }
 
     private var inputPlaceholder: String {

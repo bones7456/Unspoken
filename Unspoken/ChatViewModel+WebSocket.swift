@@ -70,6 +70,9 @@ extension ChatViewModel: WebSocketDelegate {
         DispatchQueue.main.async {
             switch action {
             case "room_created", "room_joined":
+                // Rejoining a room the peer unpinned: it survives read-only until its grace
+                // period ends, just long enough to drain the queue and be read one last time.
+                let dying = (json["unpinned"] as? Bool) == true
                 if let roomId = json["room_id"] as? String,
                    let role   = json["role"] as? String {
                     self.roomId = roomId
@@ -101,17 +104,27 @@ extension ChatViewModel: WebSocketDelegate {
                         }
                         print("Received and set peer public key")
                         if self.isPinned {
-                            self.messages.append(Message(content: "Rejoined pinned room. Encrypted channel restored.", isFromMe: false, isTyping: false, isSystem: true))
+                            if !dying {
+                                self.messages.append(Message(content: "Rejoined pinned room. Encrypted channel restored.", isFromMe: false, isTyping: false, isSystem: true))
+                            }
                             if let pendingCount = json["pending_count"] as? Int, pendingCount > 0 {
                                 self.messages.append(Message(content: "\(pendingCount)", isFromMe: false, isTyping: false, isPendingPlaceholder: true))
                             }
                         } else {
                             self.messages.append(Message(content: "Encrypted channel established, enjoy!", isFromMe: false, isTyping: false, isSystem: true))
                         }
-                        self.retryPendingMessages()
+                        // A dying room takes no new messages — don't resend anything into it.
+                        if !dying { self.retryPendingMessages() }
                     } else {
                         print("Failed to create peer public key: \(error?.takeRetainedValue().localizedDescription ?? "Unknown")")
                     }
+                }
+                // Must run after the peer key was installed above: entering farewell clears it,
+                // which is what closes the sending gate for good.
+                if dying {
+                    let until = (json["grace_until"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
+                    let pendingCount = json["pending_count"] as? Int ?? 0
+                    self.enterFarewell(.unpinnedByPeer, roomAlive: true, graceUntil: until, draining: pendingCount > 0)
                 }
 
             case "user_joined":
@@ -149,15 +162,7 @@ extension ChatViewModel: WebSocketDelegate {
                 if self.isTalking { self.stopTalking() }
 
             case "room_closed":
-                self.stopPeerHeartRate()
-                self.stopHeartRateMode(notifyPeer: false)
-                self.resetPeerVoiceStream()
-                if self.isTalking { self.stopTalking() }
-                self.messages.append(Message(content: "Host has left the room. The room is closed.", isFromMe: false, isTyping: false, isSystem: true))
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                    guard let self, self.isChatOpen else { return }
-                    self.leaveRoom()
-                }
+                self.enterFarewell(.hostClosed)
 
             case "typing":
                 if let encryptedAESKey = json["encrypted_aes_key"] as? String,
@@ -226,20 +231,16 @@ extension ChatViewModel: WebSocketDelegate {
             case "room_unpinned":
                 let unpinnedRoomId = (json["room_id"] as? String) ?? ""
                 if unpinnedRoomId.isEmpty || unpinnedRoomId == self.roomId {
-                    self.clearPinnedRoom()
-                    self.stopPeerHeartRate()
-                    self.stopHeartRateMode(notifyPeer: false)
-                    self.resetPeerVoiceStream()
-                    if self.isTalking { self.stopTalking() }
-                    self.messages.append(Message(content: "Room has been unpinned by peer.", isFromMe: false, isTyping: false, isSystem: true))
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                        guard let self, self.isChatOpen else { return }
-                        self.isChatOpen = false
-                        self.roomId = ""
-                        self.role = ""
-                        self.messages = []
-                        self.peerPublicKey = nil
-                        self.peerUserId = nil
+                    if let until = (json["grace_until"] as? String).flatMap({ ISO8601DateFormatter().date(from: $0) }) {
+                        // Grace unpin: the room lives on read-only, so keep the pinned entry and
+                        // the connection — a queue may still be draining, and Face ID can rejoin.
+                        let draining = self.messages.contains { $0.isPendingPlaceholder }
+                        self.enterFarewell(.unpinnedByPeer, roomAlive: true, graceUntil: until, draining: draining)
+                    } else {
+                        // Destroyed outright (report flow, or an older server): keep what is on
+                        // screen readable, but nothing can be rejoined afterwards.
+                        self.clearPinnedRoom()
+                        self.enterFarewell(.unpinnedByPeer)
                     }
                 } else {
                     self.removePinnedRoomFromStorage(roomId: unpinnedRoomId)
@@ -293,18 +294,31 @@ extension ChatViewModel: WebSocketDelegate {
                             "pending_msg_id": pendingMsgId
                         ])
                     }
+                    // Draining the last queue of a room that was unpinned with grace.
+                    self.noteFarewellDrainProgress(remaining: json["pending_count"] as? Int ?? 0)
                 }
 
             case "error":
                 if let errorMessage = json["message"] as? String {
                     print("Error: \(errorMessage)")
-                    if self.isPinned && errorMessage.lowercased().contains("not found") {
+                    let roomIsGone = errorMessage.lowercased().contains("not found")
+                        || errorMessage == "You unpinned this room."
+                    if roomIsGone && (self.isPinned || self.isFarewell) {
+                        let hasHistoryOnScreen = self.isChatOpen && !self.messages.isEmpty
                         self.clearPinnedRoom()
-                        self.isChatOpen = false
-                        self.roomId = ""
-                        self.role = ""
-                        self.peerPublicKey = nil
-                        self.peerUserId = nil
+                        if hasHistoryOnScreen {
+                            // Died while we were away mid-session, or the grace period ran out
+                            // under our feet: keep whatever is on screen readable.
+                            self.enterFarewell(self.farewell ?? .unpinnedByPeer)
+                        } else {
+                            // Nothing to read (rejoin straight from the selection screen).
+                            self.isChatOpen = false
+                            self.roomId = ""
+                            self.role = ""
+                            self.peerPublicKey = nil
+                            self.peerUserId = nil
+                            self.joinError = "This pinned room no longer exists. It has been removed from this device."
+                        }
                     }
                 }
 

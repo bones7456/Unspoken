@@ -225,8 +225,13 @@ extension ChatViewModel {
         pinRequestReceived = false
     }
 
-    func unpinRoom() {
-        sendJSON(["action": "unpin_room", "room_id": roomId, "role": role])
+    /// Unpin the current room. With `grace`, the server keeps it read-only for a while so the
+    /// peer can still read the last messages; without it everything is destroyed immediately
+    /// (the report flow relies on that, and it is also the "erase now" option in the UI).
+    func unpinRoom(grace: Bool = false) {
+        var message: [String: Any] = ["action": "unpin_room", "room_id": roomId, "role": role]
+        if grace { message["grace"] = true }
+        sendJSON(message)
         clearPinnedRoom()
         leaveRoom()
     }

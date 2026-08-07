@@ -14,6 +14,19 @@ import Network
 
 typealias StarscreamWebSocket = Starscream.WebSocket
 
+/// Why a room ended. Both cases keep the conversation readable instead of closing the chat.
+enum FarewellReason: Equatable {
+    case unpinnedByPeer
+    case hostClosed
+
+    var systemText: String {
+        switch self {
+        case .unpinnedByPeer: return "Your peer unpinned this room."
+        case .hostClosed:     return "Host has left the room. The room is closed."
+        }
+    }
+}
+
 class ChatViewModel: ObservableObject {
     @Published var messages: [Message] = []
     @Published var typingContent: String = ""
@@ -44,8 +57,20 @@ class ChatViewModel: ObservableObject {
     /// screen is shown in its place, including in the app-switcher snapshot) while all
     /// in-memory state — messages, peer keys, room metadata — is preserved. Face ID restores it.
     @Published var isLocked: Bool = false
+    /// Non-nil once the room has ended. The conversation stays on screen, read-only, until the
+    /// user closes it — see enterFarewell(). Nothing can be sent in this state.
+    @Published var farewell: FarewellReason?
+    /// Still pulling the last queued messages out of the server before the room is closed.
+    @Published var farewellDraining: Bool = false
+    /// Server-side destruction deadline of a room unpinned with grace (nil = already gone).
+    @Published var farewellGraceUntil: Date?
+    /// A rejoin the server refused because the room no longer exists; shown on the selection screen.
+    @Published var joinError: String?
+
+    var isFarewell: Bool { farewell != nil }
 
     private var socket: StarscreamWebSocket?
+    private var farewellDrainTimer: Timer?
     var healthStore: HKHealthStore?
     var heartRateTimer: Timer?
     var hapticLoopActive = false
@@ -295,9 +320,85 @@ class ChatViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Farewell (the room ended, but its messages stay readable)
+
+    /// Put the session into read-only farewell mode: the conversation stays on screen until the
+    /// user closes it, but nothing can be sent any more.
+    ///
+    /// `roomAlive` marks a room that was unpinned *with grace*: it still exists server-side, so
+    /// the connection is kept — queued messages may still be draining, and a Face ID restore can
+    /// rejoin it. Otherwise the room is already gone and every reconnect path is frozen instead.
+    /// `graceUntil` is that room's destruction deadline, shown to the user.
+    func enterFarewell(_ reason: FarewellReason, roomAlive: Bool = false, graceUntil: Date? = nil, draining: Bool = false) {
+        let firstEntry = (farewell == nil)
+        farewell = reason
+        farewellGraceUntil = graceUntil
+        farewellDraining = draining
+
+        // Close the sending gate. Receiving still works — decryption uses our own private key.
+        peerPublicKey = nil
+        peerIsOnline = false
+        typingContent = ""
+        stopHeartRateMode(notifyPeer: false)
+        stopPeerHeartRate()
+        abortVoiceCapture()
+        resetPeerVoiceStream()
+
+        if !roomAlive {
+            // Nothing left on the server: stop reconnecting, rejoining and draining.
+            isUserLeft = true
+            reconnectTimer?.invalidate()
+            isReconnecting = false
+            socket?.delegate = nil
+            socket?.disconnect()
+            isSocketConnected = false
+            farewellDraining = false
+            messages.removeAll { $0.isPendingPlaceholder }
+        }
+
+        if firstEntry { addSystemMessage(reason.systemText) }
+        if farewellDraining { scheduleFarewellDrainTimeout() } else { farewellDrainTimer?.invalidate() }
+    }
+
+    /// Called for every queued message delivered while draining. `remaining == 0` ends the drain.
+    func noteFarewellDrainProgress(remaining: Int) {
+        guard farewellDraining else { return }
+        if remaining <= 0 { finishFarewellDrain() } else { scheduleFarewellDrainTimeout() }
+    }
+
+    /// A queued message that fails to decrypt is never acked, which stalls the stop-and-wait
+    /// queue — never let "delivering the last messages" hang on that.
+    private func scheduleFarewellDrainTimeout() {
+        farewellDrainTimer?.invalidate()
+        farewellDrainTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak self] _ in
+            self?.finishFarewellDrain()
+        }
+    }
+
+    private func finishFarewellDrain() {
+        guard farewellDraining else { return }
+        farewellDrainTimer?.invalidate()
+        farewellDraining = false
+        messages.removeAll { $0.isPendingPlaceholder }
+    }
+
+    /// The farewell screen's Close button: destroy the room everywhere, then wipe the session.
+    func dismissFarewell() {
+        if isPinned {
+            // No 'grace' flag: the last reader is done, so destroy it server-side right now.
+            sendJSON(["action": "unpin_room", "room_id": roomId, "role": role])
+            clearPinnedRoom()
+        }
+        leaveRoom()
+    }
+
     func leaveRoom() {
         isUserLeft = true
         isLocked = false
+        farewell = nil
+        farewellDraining = false
+        farewellGraceUntil = nil
+        farewellDrainTimer?.invalidate()
         reconnectTimer?.invalidate()
         isReconnecting = false
         stopHeartRateMode()
