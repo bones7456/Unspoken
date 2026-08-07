@@ -104,6 +104,7 @@ private enum AppAlert: Identifiable {
     case copySuccess
     case pinRequest
     case heartRate(String)
+    case voice(String)
     case unpinConfirm
 
     var id: String {
@@ -112,6 +113,7 @@ private enum AppAlert: Identifiable {
         case .copySuccess:  return "copySuccess"
         case .pinRequest:   return "pinRequest"
         case .heartRate:    return "heartRate"
+        case .voice:        return "voice"
         case .unpinConfirm: return "unpinConfirm"
         }
     }
@@ -153,6 +155,9 @@ struct ContentView: View {
     @State private var insertingNewLine: Bool = false
 
     var canSendMessage: Bool { viewModel.peerPublicKey != nil }
+    // Voice works when the peer is online (walkie-talkie) or, in a pinned room, offline
+    // (recorded as a queued voice message). Non-pinned + offline peer means the room is gone.
+    var canUseVoice: Bool { viewModel.peerPublicKey != nil && (viewModel.peerIsOnline || viewModel.isPinned) }
 
     var body: some View {
         GeometryReader { _ in
@@ -196,6 +201,12 @@ struct ContentView: View {
                     message: Text(msg),
                     dismissButton: .default(Text("OK")) { viewModel.heartRateModeError = nil }
                 )
+            case .voice(let msg):
+                return Alert(
+                    title: Text("Voice"),
+                    message: Text(msg),
+                    dismissButton: .default(Text("OK")) { viewModel.voiceError = nil }
+                )
             case .unpinConfirm:
                 return Alert(
                     title: Text("Unpin this room?"),
@@ -210,6 +221,9 @@ struct ContentView: View {
         }
         .onChange(of: viewModel.heartRateModeError) { newValue in
             if let msg = newValue, activeAlert == nil { activeAlert = .heartRate(msg) }
+        }
+        .onChange(of: viewModel.voiceError) { newValue in
+            if let msg = newValue, activeAlert == nil { activeAlert = .voice(msg) }
         }
         .confirmationDialog("Send Image", isPresented: $showImageSourceDialog) {
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
@@ -403,7 +417,7 @@ struct ContentView: View {
                 ScrollView {
                     VStack(spacing: 2) {
                         ForEach(viewModel.messages) { message in
-                            MessageView(message: message, onReport: {
+                            MessageView(message: message, voicePlayer: viewModel.voiceMessagePlayer, onReport: {
                                 viewModel.reportUser()
                             }, showReport: !viewModel.isPinned, showTimestamp: showTimestamps, onImageTap: { image in
                                 activeSheet = .fullScreenImage(IdentifiableImage(image: image))
@@ -415,6 +429,7 @@ struct ContentView: View {
                         if !viewModel.typingContent.isEmpty {
                             MessageView(
                                 message: Message(content: viewModel.typingContent, isFromMe: false, isTyping: true),
+                                voicePlayer: viewModel.voiceMessagePlayer,
                                 onReport: { viewModel.reportUser() },
                                 showReport: !viewModel.isPinned
                             )
@@ -485,6 +500,8 @@ struct ContentView: View {
                             .font(.caption.bold()).foregroundColor(.white.opacity(0.85))
                         if quoted.imageData != nil {
                             Text("[Image]").font(.caption).foregroundColor(.white.opacity(0.6)).lineLimit(1)
+                        } else if quoted.audioData != nil {
+                            Text("[Voice]").font(.caption).foregroundColor(.white.opacity(0.6)).lineLimit(1)
                         } else {
                             Text(quoted.content).font(.caption).foregroundColor(.white.opacity(0.6)).lineLimit(1)
                         }
@@ -500,6 +517,27 @@ struct ContentView: View {
                 .background(Color.white.opacity(0.08))
             }
 
+            // Voice status banner: peer transmitting, or our own recording/live state.
+            if viewModel.peerIsTalking {
+                HStack(spacing: 6) {
+                    Image(systemName: "waveform")
+                    Text("Peer is talking…")
+                    Spacer()
+                }
+                .font(.caption)
+                .foregroundColor(Color(red: 1.0, green: 0.6, blue: 0.8))
+                .padding(.horizontal, 15).padding(.vertical, 4)
+            } else if viewModel.isTalking {
+                HStack(spacing: 6) {
+                    Circle().fill(Color.red).frame(width: 8, height: 8)
+                    Text(viewModel.peerIsOnline ? "Live — release to stop" : "Recording — release to send")
+                    Spacer()
+                }
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.85))
+                .padding(.horizontal, 15).padding(.vertical, 4)
+            }
+
             HStack(spacing: 6) {
                 Button(action: { showImageSourceDialog = true }) {
                     Image(systemName: "photo").foregroundColor(.white)
@@ -507,6 +545,23 @@ struct ContentView: View {
                         .background(Color.white.opacity(0.2)).clipShape(Circle())
                 }
                 .disabled(!canSendMessage)
+
+                // Push-to-talk: hold to stream live (peer online) or record a voice message
+                // (pinned room, peer offline); release to send.
+                if canUseVoice {
+                    Image(systemName: viewModel.isTalking ? "waveform" : "mic.fill")
+                        .foregroundColor(viewModel.isTalking ? .red : .white)
+                        .frame(width: 36, height: 36)
+                        .background(viewModel.isTalking ? Color.red.opacity(0.25) : Color.white.opacity(0.2))
+                        .clipShape(Circle())
+                        .scaleEffect(viewModel.isTalking ? 1.15 : 1.0)
+                        .animation(.easeInOut(duration: 0.15), value: viewModel.isTalking)
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { _ in viewModel.startTalking() }
+                                .onEnded { _ in viewModel.stopTalking() }
+                        )
+                }
 
                 Group {
                     if #available(iOS 16, *) {

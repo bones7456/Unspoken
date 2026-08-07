@@ -24,6 +24,7 @@
 		F2974FEC758A287941D1C9C9 /* ChatViewModel+HeartRate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EB6419D5E21774D0EF2F2FB /* ChatViewModel+HeartRate.swift */; };
 		F5A3623EA60C945E9DF5015C /* ScreenshotProtected.swift in Sources */ = {isa = PBXBuildFile; fileRef = B97FB0F4E83DC6878CCDD5A6 /* ScreenshotProtected.swift */; };
 		F6A82ECF2CF871674F5A8CBD /* WCAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45CD05A26DDCD28A72E6E8A6 /* WCAdapter.swift */; };
+		A11CE00100000000000000F2 /* VoiceChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE00100000000000000F1 /* VoiceChat.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -56,6 +57,7 @@
 		1EB6419D5E21774D0EF2F2FB /* ChatViewModel+HeartRate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatViewModel+HeartRate.swift"; sourceTree = "<group>"; };
 		29DFCF37AFC447A104B9AC1A /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		45CD05A26DDCD28A72E6E8A6 /* WCAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WCAdapter.swift; sourceTree = "<group>"; };
+		A11CE00100000000000000F1 /* VoiceChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceChat.swift; sourceTree = "<group>"; };
 		4803AD3F35D795E904CD172C /* ChatViewModel+PinRoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatViewModel+PinRoom.swift"; sourceTree = "<group>"; };
 		83D530576D5CF8B70831C69D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		A2020E912F57C36E00ECD0B9 /* Unspoken.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Unspoken.entitlements; sourceTree = "<group>"; };
@@ -122,6 +124,7 @@
 				A27A1D232C6891FA005954F6 /* ContentView.swift */,
 				83D530576D5CF8B70831C69D /* Models.swift */,
 				45CD05A26DDCD28A72E6E8A6 /* WCAdapter.swift */,
+				A11CE00100000000000000F1 /* VoiceChat.swift */,
 				29DFCF37AFC447A104B9AC1A /* ChatViewModel.swift */,
 				A8C505B8CE2BFBE243EBA3E2 /* ChatViewModel+Crypto.swift */,
 				4803AD3F35D795E904CD172C /* ChatViewModel+PinRoom.swift */,
@@ -266,6 +269,7 @@
 				A27A1D242C6891FA005954F6 /* ContentView.swift in Sources */,
 				729A150EAE4793319564AD3F /* Models.swift in Sources */,
 				F6A82ECF2CF871674F5A8CBD /* WCAdapter.swift in Sources */,
+				A11CE00100000000000000F2 /* VoiceChat.swift in Sources */,
 				23302727FE83731000625271 /* ChatViewModel.swift in Sources */,
 				0193A61A5F80249E1BFF288A /* ChatViewModel+Crypto.swift in Sources */,
 				DDFF87178E1374F788630E97 /* ChatViewModel+PinRoom.swift in Sources */,

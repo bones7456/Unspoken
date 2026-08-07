@@ -46,10 +46,22 @@ See "Cloudflare Server" section below for architecture.
 
 ## Architecture
 
-### iOS client (~1200 LOC across two Swift files, MVVM)
+### iOS client (~3,600 LOC across ~14 Swift files, MVVM)
 
-- **`ContentView.swift`** — Contains `ChatViewModel` (ObservableObject), `ContentView`, `MessageView`, and `Message` model. All chat logic, WebSocket handling, encryption, and pin room persistence live here.
-- **`UnspokenApp.swift`** — App entry point (`@main`) and `RoomSelectionView`. Handles URL scheme routing (`unspoken://host:port/room_id`) and pinned room rejoin UI.
+`ChatViewModel` (ObservableObject) is the single view model. It lives in `ChatViewModel.swift` (core state, message send, room lifecycle) and is split by concern into extensions:
+- **`ChatViewModel.swift`** — `@Published` state, `init`, key management, `sendMessage`/`sendImage`/voice send, `retryPendingMessages`, `leaveRoom`.
+- **`ChatViewModel+WebSocket.swift`** — `WebSocketDelegate`; `handleMessage` dispatches every server response in one big `switch`.
+- **`ChatViewModel+Crypto.swift`** — RSA/AES helpers, `wrapPayload`/`unwrapPayload`, key persistence.
+- **`ChatViewModel+PinRoom.swift`** — pin/unpin flow, pinned-room UserDefaults persistence, Face ID unlock.
+- **`ChatViewModel+HeartRate.swift`** — heart rate capture/relay/haptics (see "Heart Rate Feature").
+
+Views, models, and utilities:
+- **`UnspokenApp.swift`** — `@main`, `RoomSelectionView`, URL-scheme routing (`unspoken://host:port/room_id`), pinned-room rejoin UI.
+- **`ContentView.swift`** — chat screen: header, message list, input area (text/image/voice), all alerts via one `AppAlert` enum.
+- **`MessageView.swift`** — message bubble rendering (text / image / `VoiceBubbleView`) + quote block.
+- **`Models.swift`** — `Message` and `QuoteContent` value types.
+- **`VoiceChat.swift`** — voice capture + playback (see "Voice Feature").
+- **`ImagePicker.swift`**, **`MemeSearchView.swift`** — image sources; `ScreenshotProtected.swift` — screenshot blocking; **`WCAdapter.swift`** — `WCSessionDelegate` wrapper feeding Watch BPM to `ChatViewModel`.
 
 **State flow:** `ChatViewModel` is created as `@StateObject` in `UnspokenApp` and passed via `@EnvironmentObject` to child views. Navigation switches between `RoomSelectionView` and `ContentView` based on `chatViewModel.isChatOpen`.
 
@@ -90,6 +102,8 @@ JSON-based protocol over WSS. See `TECHNICAL_DOCUMENTATION.md` for full protocol
 **Pin actions:** `request_pin`, `accept_pin`, `reject_pin`, `unpin_room`
 
 **Server-only responses:** `room_created`, `room_joined`, `user_joined`, `user_left`, `room_closed`, `new_message`, `pin_requested`, `pin_accepted`, `pin_rejected`, `room_unpinned`, `peer_status`, `pending_messages`, `error`, `blocked`
+
+**Encrypted message payload types** (the `type` field inside the AES-GCM plaintext wrapped by `wrapPayload`/`unwrapPayload`, carried by `send_message`/`new_message`/`pending_message`): `text`, `image`, `audio` (voice message), `voice_stream` (live walkie-talkie segment), `voice_end` (walkie-talkie end marker). The server never inspects these — it relays/queues the opaque ciphertext — so voice needed **no server change**. See "Voice Feature".
 
 ## Pin Room Feature
 
@@ -220,6 +234,44 @@ Receives `["bpm": X]` from Watch → calls closure → `currentBPM = bpm` on mai
 
 ### Server relay (unspoken.py)
 `heart_rate` action: same pattern as `typing` — direct relay to peer, no queuing.
+
+## Voice Feature
+
+Push-to-talk (hold the mic button in the input bar). Behavior is **adaptive on peer status at press time**:
+- **Peer online → live walkie-talkie.** Captured as ~1s AAC/m4a segments streamed as payload `type: "voice_stream"` via `send_message` **without `seq`** (no ack round-trip, ephemeral). Release sends `type: "voice_end"` (data = seconds spoken). Both sides get a "🎙️ Walkie-talkie m:ss" **system line** — no bubble.
+- **Peer offline + pinned room → one queued voice message.** The whole hold is encoded to a single `type: "audio"` payload sent via `send_message` **with `seq`** (server queues it, delivers on reconnect), rendered as a **playable voice bubble**.
+- **Peer offline + non-pinned → button hidden** (`canUseVoice = peerPublicKey != nil && (peerIsOnline || isPinned)`).
+
+**No server change.** Reuses `send_message`/`new_message`/`pending_message` (both Python and CF). The user's explicit tradeoff: `voice_stream`/`voice_end` fragments sent in the race window before a pinned peer's offline signal get queued; the receiver **discards them on reconnect** — the `pending_message` handler treats `voice_stream`/`voice_end` as a no-op (no bubble) but **still sends `pending_ack`** to drain the queue. `audio` in `pending_message` is a real message → delivered as a bubble.
+
+### Files
+- **`Unspoken/VoiceChat.swift`** — five classes + two free helpers (`voiceDurationOf`, `formatVoiceDuration`):
+  - `VoiceAudioSession` — process-wide, **reference-counted** owner of the `AVAudioSession`. Capture and playback must never configure the session themselves: a walkie-talkie has both running at once, so a `.playback` switch would drop the mic off the route mid-transmission and a `setActive(false)` on PTT release would cut the peer's playback short. One `.playAndRecord` + `.defaultToSpeaker` + `.allowBluetooth` + `.mixWithOthers` config is installed by the first `acquire()` and only deactivated when the last holder `release()`s. Every voice class holds it while active (`VoiceCapture` releases synchronously in `stop()`, before its async flush, so a quick re-press can't race the release).
+  - `PCMRingBuffer` — fixed-capacity (~2s) mono float ring, the hand-off from the mic tap to the encoder queue. The tap thread is real-time, so it only memcpys into preallocated storage under a short `os_unfair_lock` (priority-donating); multi-channel input is downmixed to mono on the way in so both sides stay a straight memcpy. Overflow drops the oldest samples rather than blocking the tap.
+  - `VoiceCapture` — `AVAudioEngine` input tap → `PCMRingBuffer` → AAC/m4a. **No encoding or file I/O ever happens on the tap thread**: a `DispatchSourceTimer` on the private `ioQueue` drains the ring ~10x/s, writes to the `AVAudioFile`, and rotates the segment when ~1s of frames has accumulated. `Mode.stream` emits each self-contained ~1s segment via `onSegment`; `Mode.file` accumulates the whole hold and emits once via `onFileComplete(data, duration)`. Callbacks fire on main. `stop(completion:)` flushes the trailing segment/whole file **before** `completion`, so the caller can send `voice_end` knowing the last segment already went out.
+  - `VoiceStreamPlayer` — receiver jitter buffer: buffers segments, starts playback only after ~2 segments (~2s cushion), then plays back-to-back through an `AVQueuePlayer`; resumes after an underrun; `onFinished` fires when the stream ended (`voice_end`) **and** the queue drained. A press too short to produce any segment (`voice_end` with nothing buffered) finishes immediately instead of leaving the player half-started — otherwise the *next* stream's first underrun would fire `onFinished` mid-stream.
+  - `VoiceMessagePlayer: ObservableObject` — plays one voice-message bubble at a time; `@Published playingId`/`progress` observed by `MessageView`.
+- **`Unspoken/Info.plist`** — `NSMicrophoneUsageDescription`.
+- **`Models.swift`** — `Message.audioData`/`audioDuration`; `QuoteContent.audio(duration)` (wire `type:"audio"`, data = seconds string).
+- **`MessageView.swift`** — `VoiceBubbleView` (play/pause + duration + progress track scaled by duration); takes the shared `VoiceMessagePlayer`. Quote block + compose-time quote preview show `[Voice]`.
+
+### Key state (ChatViewModel)
+- `@Published isTalking` — self transmitting (stream or file recording)
+- `@Published peerIsTalking` — receiving a live stream (drives the "Peer is talking…" banner)
+- `@Published voiceError` — mic denied etc., surfaced via the shared `AppAlert` (`.voice` case)
+- `talkRequested` (private) — guards the async mic-permission race: the PTT `DragGesture(minimumDistance: 0)` calls `startTalking()` on `.onChanged` and `stopTalking()` on `.onEnded`; if released before the permission callback returns, the callback tears the capture down instead of going live.
+
+### Send / receive (ChatViewModel.swift)
+- `startTalking()` picks mode from `peerIsOnline`/`isPinned`, wires `voiceCapture` callbacks, requests mic.
+- `stopTalking()` → `voiceCapture.stop`; stream mode sends `voice_end` + appends the self summary line; file mode appends its bubble from `sendVoiceMessage`.
+- `sendVoiceSegment` / `sendVoiceEnd` (private, guarded on `peerIsOnline`, no `seq`) and `sendVoiceMessage(data:duration:)` (5 MB guard, `seq`, appends own bubble). `retryPendingMessages` has an `audio` branch (resent on reconnect like images).
+- Receiver hooks: `receiveVoiceSegment`, `receiveVoiceEnd`, `resetPeerVoiceStream`.
+
+### Cleanup triggers (call `resetPeerVoiceStream()` + `stopTalking()` if talking)
+`user_left`, `room_closed`, `room_unpinned`, `peer_status: offline`. `leaveRoom()` uses `abortVoiceCapture()` (suppresses the trailing emission) + `resetPeerVoiceStream()` + `voiceMessagePlayer.stop()`.
+
+### Cross-client note
+`Unspoken-web` does not yet play `audio`/`voice_stream` (its fallback renders base64 as text) — voice is iOS↔iOS only for now.
 
 ## Conventions
 

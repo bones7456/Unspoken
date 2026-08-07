@@ -145,10 +145,14 @@ extension ChatViewModel: WebSocketDelegate {
                 self.typingContent = ""
                 self.stopPeerHeartRate()
                 self.stopHeartRateMode(notifyPeer: false)
+                self.resetPeerVoiceStream()
+                if self.isTalking { self.stopTalking() }
 
             case "room_closed":
                 self.stopPeerHeartRate()
                 self.stopHeartRateMode(notifyPeer: false)
+                self.resetPeerVoiceStream()
+                if self.isTalking { self.stopTalking() }
                 self.messages.append(Message(content: "Host has left the room. The room is closed.", isFromMe: false, isTyping: false, isSystem: true))
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
                     guard let self, self.isChatOpen else { return }
@@ -175,9 +179,20 @@ extension ChatViewModel: WebSocketDelegate {
                    let encryptedContent = json["encrypted_content"] as? String,
                    let decryptedContent = self.decryptMessage(encryptedAESKey: encryptedAESKey, encryptedMessage: encryptedContent) {
                     let (type, data, quote) = self.unwrapPayload(decryptedContent)
-                    if type == "image", let imgData = Data(base64Encoded: data) {
-                        self.messages.append(Message(content: "", isFromMe: false, isTyping: false, imageData: imgData, quote: quote))
-                    } else {
+                    switch type {
+                    case "image":
+                        if let imgData = Data(base64Encoded: data) {
+                            self.messages.append(Message(content: "", isFromMe: false, isTyping: false, imageData: imgData, quote: quote))
+                        }
+                    case "audio":
+                        if let aData = Data(base64Encoded: data) {
+                            self.messages.append(Message(content: "", isFromMe: false, isTyping: false, audioData: aData, audioDuration: voiceDurationOf(aData), quote: quote))
+                        }
+                    case "voice_stream":
+                        if let sData = Data(base64Encoded: data) { self.receiveVoiceSegment(sData) }
+                    case "voice_end":
+                        self.receiveVoiceEnd(seconds: Int(data) ?? 0)
+                    default:
                         self.messages.append(Message(content: data, isFromMe: false, isTyping: false, quote: quote))
                     }
                 }
@@ -214,6 +229,8 @@ extension ChatViewModel: WebSocketDelegate {
                     self.clearPinnedRoom()
                     self.stopPeerHeartRate()
                     self.stopHeartRateMode(notifyPeer: false)
+                    self.resetPeerVoiceStream()
+                    if self.isTalking { self.stopTalking() }
                     self.messages.append(Message(content: "Room has been unpinned by peer.", isFromMe: false, isTyping: false, isSystem: true))
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
                         guard let self, self.isChatOpen else { return }
@@ -238,6 +255,8 @@ extension ChatViewModel: WebSocketDelegate {
                         self.typingContent = ""
                         self.stopPeerHeartRate()
                         self.stopHeartRateMode(notifyPeer: false)
+                        self.resetPeerVoiceStream()
+                        if self.isTalking { self.stopTalking() }
                     }
                 }
 
@@ -249,9 +268,18 @@ extension ChatViewModel: WebSocketDelegate {
                     let isoFormatter = ISO8601DateFormatter()
                     let timestamp = (json["timestamp"] as? String).flatMap { isoFormatter.date(from: $0) }
                     let (type, data, quote) = self.unwrapPayload(decryptedContent)
-                    if type == "image", let imgData = Data(base64Encoded: data) {
-                        self.messages.append(Message(content: "", isFromMe: false, isTyping: false, timestamp: timestamp, imageData: imgData, quote: quote))
-                    } else {
+                    switch type {
+                    case "image":
+                        if let imgData = Data(base64Encoded: data) {
+                            self.messages.append(Message(content: "", isFromMe: false, isTyping: false, timestamp: timestamp, imageData: imgData, quote: quote))
+                        }
+                    case "audio":
+                        if let aData = Data(base64Encoded: data) {
+                            self.messages.append(Message(content: "", isFromMe: false, isTyping: false, timestamp: timestamp, audioData: aData, audioDuration: voiceDurationOf(aData), quote: quote))
+                        }
+                    case "voice_stream", "voice_end":
+                        break   // stale live walkie-talkie fragments queued during a disconnect: discard (still acked below)
+                    default:
                         self.messages.append(Message(content: data, isFromMe: false, isTyping: false, timestamp: timestamp, quote: quote))
                     }
                     if let remaining = json["pending_count"] as? Int, remaining > 0 {

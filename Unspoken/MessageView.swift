@@ -7,6 +7,7 @@ import SwiftUI
 
 struct MessageView: View {
     let message: Message
+    @ObservedObject var voicePlayer: VoiceMessagePlayer
     let onReport: () -> Void
     var showReport: Bool = true
     var showTimestamp: Bool = false
@@ -113,6 +114,13 @@ struct MessageView: View {
                     } else {
                         EmptyView()
                     }
+                case "audio":
+                    HStack(spacing: 4) {
+                        Image(systemName: "mic.fill").font(.caption2)
+                        Text(formatVoiceDuration(TimeInterval(q.text ?? "") ?? 0))
+                    }
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.75))
                 default:
                     Text(q.text ?? "")
                         .font(.caption)
@@ -174,7 +182,9 @@ struct MessageView: View {
             withMessageInteraction(
                 VStack(alignment: .leading, spacing: 0) {
                     quoteBlock
-                    if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
+                    if message.audioData != nil {
+                        VoiceBubbleView(message: message, player: voicePlayer)
+                    } else if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
                         Image(uiImage: uiImage)
                             .resizable()
                             .scaledToFit()
@@ -192,6 +202,13 @@ struct MessageView: View {
                 .background(bubbleColor)
                 .cornerRadius(10)
                 .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+            )
+        } else if message.audioData != nil {
+            withMessageInteraction(
+                VoiceBubbleView(message: message, player: voicePlayer)
+                    .background(bubbleColor)
+                    .cornerRadius(10)
+                    .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
             )
         } else if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
             withMessageInteraction(
@@ -213,6 +230,41 @@ struct MessageView: View {
                     .cornerRadius(10)
                     .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
             )
+        }
+    }
+}
+
+// MARK: - VoiceBubbleView
+// Inner content of a voice-message bubble (no background of its own — the caller supplies
+// the bubble color). Tapping toggles playback via the shared VoiceMessagePlayer.
+private struct VoiceBubbleView: View {
+    let message: Message
+    @ObservedObject var player: VoiceMessagePlayer
+
+    private var isPlaying: Bool { player.playingId == message.id }
+    private var duration: TimeInterval { message.audioDuration ?? 0 }
+
+    var body: some View {
+        // Track length scales gently with duration so a 2s clip and a 40s clip look different.
+        let trackW = max(50, min(130, CGFloat(duration) * 7))
+        HStack(spacing: 8) {
+            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                .font(.system(size: 26))
+                .foregroundColor(.white)
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.35)).frame(width: trackW, height: 3)
+                Capsule().fill(Color.white)
+                    .frame(width: trackW * CGFloat(isPlaying ? player.progress : 0), height: 3)
+            }
+            Text(formatVoiceDuration(duration))
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.white.opacity(0.9))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let data = message.audioData { player.toggle(id: message.id, data: data) }
         }
     }
 }
