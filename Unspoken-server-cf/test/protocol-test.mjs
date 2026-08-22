@@ -302,6 +302,93 @@ async function main() {
   eq((await d2.expect("failed")).message, "Your account has been blocked due to violations.", "create_room failed");
   d2.close();
 
+  // --- grace-period unpin: the room dies slowly and stays readable ---
+  step("Grace unpin: peer is told, unpinner is locked out, room turns read-only");
+  const userF = uid("f");
+  const userG = uid("g");
+  const f = await connectAndLogin("F", userF, PEM_A);
+  f.send({ action: "create_room", user_id: userF });
+  const room4 = (await f.expect("room_created")).room_id;
+  let g = await connectAndLogin("G", userG, PEM_B);
+  g.send({ action: "join_room", room_id: room4, user_id: userG });
+  await g.expect("room_joined");
+  await f.expect("user_joined");
+  f.send({ action: "request_pin", room_id: room4, role: "host" });
+  await g.expect("pin_requested");
+  g.send({ action: "accept_pin", room_id: room4, role: "guest" });
+  await f.expect("pin_accepted");
+  await g.expect("pin_accepted");
+
+  // G steps out of the room but stays connected, so it can receive room_unpinned.
+  g.send({ action: "leave_room", room_id: room4, role: "guest", user_id: userG });
+  eq((await f.expect("peer_status")).status, "offline", "grace: peer offline before unpin");
+  f.send({ action: "send_message", room_id: room4, role: "host", encrypted_aes_key: "gk0", encrypted_content: "last-words", seq: 10 });
+  eq((await f.expect("ack")).seq, 10, "grace: last message queued");
+
+  f.send({ action: "unpin_room", room_id: room4, role: "host", grace: true });
+  const unpinned = await g.expect("room_unpinned");
+  eq(unpinned.room_id, room4, "grace: room_unpinned.room_id");
+  eq(typeof unpinned.grace_until === "string", true, "grace: room_unpinned.grace_until present");
+  const graceSeconds = (Date.parse(unpinned.grace_until) - Date.now()) / 1000;
+  eq(graceSeconds > 0, true, "grace: grace_until is in the future");
+  console.log(`    grace window = ${Math.round(graceSeconds)}s`);
+
+  step("The unpinner cannot rejoin during the grace period");
+  f.send({ action: "join_room", room_id: room4, user_id: userF, public_key: PEM_A });
+  eq((await f.expect("error")).message, "You unpinned this room.", "grace: unpinner locked out");
+
+  step("The survivor rejoins a dying room and still drains the pending queue");
+  g.send({ action: "join_room", room_id: room4, user_id: userG, public_key: PEM_B });
+  const gRejoin = await g.expect("room_joined");
+  eq(gRejoin.pinned, true, "grace: rejoin.pinned");
+  eq(gRejoin.unpinned, true, "grace: rejoin.unpinned");
+  eq(gRejoin.grace_until, unpinned.grace_until, "grace: rejoin.grace_until matches");
+  eq(gRejoin.peer_status, "offline", "grace: peer always offline in a dying room");
+  eq(gRejoin.pending_count, 1, "grace: rejoin.pending_count");
+  const gPending = await g.expect("pending_message");
+  eq(gPending.encrypted_content, "last-words", "grace: pending content still delivered");
+  g.send({ action: "pending_ack", room_id: room4, role: "guest", pending_msg_id: gPending.pending_msg_id });
+  await f.expectNone("user_joined");
+
+  step("Sending into a dying room is dropped but still acked");
+  g.send({ action: "send_message", room_id: room4, role: "guest", encrypted_aes_key: "gk1", encrypted_content: "into-the-void", seq: 11 });
+  eq((await g.expect("ack")).seq, 11, "grace: send into dying room still acked");
+  // Proof it was dropped rather than queued: the queue path would reject this size.
+  g.send({ action: "send_message", room_id: room4, role: "guest", encrypted_aes_key: "gk2", encrypted_content: "Z".repeat(5 * 1024 * 1024 + 1), seq: 12 });
+  eq((await g.expect("ack")).seq, 12, "grace: oversize into dying room acked");
+  await g.expectNone("error");
+
+  step("The survivor erases the dying room immediately; nobody is notified");
+  g.send({ action: "unpin_room", room_id: room4, role: "guest" });
+  await f.expectNone("room_unpinned");
+  g.send({ action: "join_room", room_id: room4, user_id: userG, public_key: PEM_B });
+  eq((await g.expect("error")).message, "Room not found or already full", "grace: erased room is gone");
+
+  if (graceSeconds <= 30) {
+    step(`Grace period expiry destroys the room (waiting ${Math.ceil(graceSeconds) + 1}s)`);
+    f.send({ action: "create_room", user_id: userF });
+    const room5 = (await f.expect("room_created")).room_id;
+    g.send({ action: "join_room", room_id: room5, user_id: userG });
+    await g.expect("room_joined");
+    await f.expect("user_joined");
+    f.send({ action: "request_pin", room_id: room5, role: "host" });
+    await g.expect("pin_requested");
+    g.send({ action: "accept_pin", room_id: room5, role: "guest" });
+    await f.expect("pin_accepted");
+    await g.expect("pin_accepted");
+    g.send({ action: "leave_room", room_id: room5, role: "guest", user_id: userG });
+    await f.expect("peer_status");
+    f.send({ action: "unpin_room", room_id: room5, role: "host", grace: true });
+    await g.expect("room_unpinned");
+    await new Promise((r) => setTimeout(r, (Math.ceil(graceSeconds) + 1) * 1000));
+    g.send({ action: "join_room", room_id: room5, user_id: userG, public_key: PEM_B });
+    eq((await g.expect("error")).message, "Room not found or already full", "grace: room destroyed after expiry");
+  } else {
+    console.log(`\n[skip] grace expiry test (window is ${Math.round(graceSeconds)}s; set UNSPOKEN_UNPIN_GRACE_SECONDS=3 to run it)`);
+  }
+  f.close();
+  g.close();
+
   step("Room limit: a 4th hosted room is rejected");
   const e = await connectAndLogin("E", uid("e"), "PEM_E");
   for (let i = 0; i < 3; i++) {

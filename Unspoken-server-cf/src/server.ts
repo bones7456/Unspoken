@@ -31,11 +31,22 @@ interface PinRow extends Record<string, SqlStorageValue> {
   guest_user_id: string;
   host_public_key: string;
   guest_public_key: string;
+  // Only set while a room is "dying" — unpinned with grace, see isDying().
+  unpinned_by: string | null;
+  destroy_after: number | null;
+}
+
+/** Env vars read by the DO. Declared locally to avoid importing from index.ts (circular). */
+interface ServerEnv {
+  UNSPOKEN_UNPIN_GRACE_SECONDS?: string;
 }
 
 const EMPTY_ATTACHMENT: Attachment = { userId: null, publicKey: "", rooms: [] };
 
 const MAX_PENDING_BYTES = 5 * 1024 * 1024; // 5 MB, same as unspoken.py
+// How long an unpinned room survives read-only so the other side can still read the last
+// messages (and drain its pending queue) before everything is destroyed.
+const DEFAULT_UNPIN_GRACE_SECONDS = 7 * 24 * 3600;
 const PENDING_CHUNK_CHARS = 1_000_000; // 1 MB per SQLite row (2 MB row limit)
 const MAX_PUBLIC_KEY_LEN = 8192;
 
@@ -85,13 +96,22 @@ function utcTimestamp(): string {
   return new Date().toISOString().slice(0, 19) + "Z";
 }
 
+/** Python iso_utc(ts): epoch seconds -> '%Y-%m-%dT%H:%M:%SZ'. */
+function isoUtc(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toISOString().slice(0, 19) + "Z";
+}
+
 export class UnspokenServer implements DurableObject {
   private ctx: DurableObjectState;
   private sql: SqlStorage;
+  private graceSeconds: number;
 
-  constructor(ctx: DurableObjectState, _env: unknown) {
+  constructor(ctx: DurableObjectState, env: ServerEnv) {
     this.ctx = ctx;
     this.sql = ctx.storage.sql;
+    const raw = env?.UNSPOKEN_UNPIN_GRACE_SECONDS;
+    const parsed = raw === undefined ? NaN : Number(raw);
+    this.graceSeconds = Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_UNPIN_GRACE_SECONDS;
     ctx.blockConcurrencyWhile(async () => {
       this.sql.exec(`
         CREATE TABLE IF NOT EXISTS meta (
@@ -106,7 +126,9 @@ export class UnspokenServer implements DurableObject {
           host_user_id TEXT NOT NULL,
           guest_user_id TEXT NOT NULL,
           host_public_key TEXT NOT NULL,
-          guest_public_key TEXT NOT NULL
+          guest_public_key TEXT NOT NULL,
+          unpinned_by TEXT,
+          destroy_after REAL
         );
         CREATE TABLE IF NOT EXISTS pending_meta (
           room_id TEXT NOT NULL,
@@ -130,7 +152,27 @@ export class UnspokenServer implements DurableObject {
           next_id INTEGER NOT NULL
         );
       `);
+      // Migration for DOs created before grace-period unpin existed.
+      const cols = this.sql
+        .exec<{ name: string }>("PRAGMA table_info(pinned_rooms)")
+        .toArray()
+        .map((r) => r.name);
+      if (!cols.includes("unpinned_by")) {
+        this.sql.exec("ALTER TABLE pinned_rooms ADD COLUMN unpinned_by TEXT");
+      }
+      if (!cols.includes("destroy_after")) {
+        this.sql.exec("ALTER TABLE pinned_rooms ADD COLUMN destroy_after REAL");
+      }
+      // Python purges on startup; the DO's equivalent is being constructed.
+      this.purgeExpiredRooms();
+      await this.scheduleNextPurge();
     });
+  }
+
+  /** Python purge_expired_rooms_loop: the DO uses an alarm set to the next expiry instead. */
+  async alarm(): Promise<void> {
+    this.purgeExpiredRooms();
+    await this.scheduleNextPurge();
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -204,6 +246,56 @@ export class UnspokenServer implements DurableObject {
   private getPin(roomId: string): PinRow | null {
     const rows = this.sql.exec<PinRow>("SELECT * FROM pinned_rooms WHERE room_id = ?", roomId).toArray();
     return rows.length > 0 ? rows[0] : null;
+  }
+
+  /** True for a room unpinned with grace: kept read-only until destroy_after passes. */
+  private isDying(roomId: string): boolean {
+    const pin = this.getPin(roomId);
+    return pin !== null && pin.destroy_after !== null;
+  }
+
+  /** Erase every trace of a room: pinned entry, pending queue, live room refs. */
+  private destroyRoom(roomId: string): void {
+    this.sql.exec("DELETE FROM pinned_rooms WHERE room_id = ?", roomId);
+    this.deletePendingQueues(roomId);
+    for (const sock of this.ctx.getWebSockets()) {
+      if (this.att(sock).rooms.some((r) => r.roomId === roomId)) this.removeRoomRef(sock, roomId);
+    }
+  }
+
+  /** Destroy a dying room whose grace period has run out. Returns true if it was destroyed. */
+  private purgeRoomIfExpired(roomId: string): boolean {
+    const pin = this.getPin(roomId);
+    if (pin !== null && pin.destroy_after !== null && Number(pin.destroy_after) <= Date.now() / 1000) {
+      this.destroyRoom(roomId);
+      logMessage("SYSTEM", "Server", `Room ${roomId} grace period expired, destroyed`);
+      return true;
+    }
+    return false;
+  }
+
+  private purgeExpiredRooms(): void {
+    const rows = this.sql
+      .exec<{ room_id: string }>("SELECT room_id FROM pinned_rooms WHERE destroy_after IS NOT NULL")
+      .toArray();
+    for (const r of rows) this.purgeRoomIfExpired(r.room_id);
+  }
+
+  /** Arm the alarm for the earliest pending expiry (no dying rooms -> no alarm). */
+  private async scheduleNextPurge(): Promise<void> {
+    const rows = this.sql
+      .exec<{ t: number | null }>("SELECT MIN(destroy_after) AS t FROM pinned_rooms WHERE destroy_after IS NOT NULL")
+      .toArray();
+    const t = rows.length > 0 ? rows[0].t : null;
+    if (t === null || t === undefined) return;
+    await this.ctx.storage.setAlarm(Math.max(Date.now(), Number(t) * 1000));
+  }
+
+  /** Fire-and-forget variant for the synchronous action handlers. */
+  private scheduleNextPurgeSoon(): void {
+    this.scheduleNextPurge().catch((e) =>
+      logMessage("SYSTEM", "Server", `Failed to schedule purge alarm: ${e}`)
+    );
   }
 
   private nextRoomId(): string {
@@ -452,12 +544,21 @@ export class UnspokenServer implements DurableObject {
     }
     const roomId = data.room_id as string;
     const userId = this.att(ws).userId;
+    // A dying room whose grace period elapsed is destroyed here, so the rejoin
+    // falls through to the regular "Room not found" answer below.
+    this.purgeRoomIfExpired(roomId);
     const pin = this.getPin(roomId);
 
     if (pin) {
       let rejoinRole: Role | null = null;
       if (pin.host_user_id === userId) rejoinRole = "host";
       else if (pin.guest_user_id === userId) rejoinRole = "guest";
+
+      if (rejoinRole && rejoinRole === pin.unpinned_by) {
+        // The side that unpinned it doesn't get to come back during the grace period.
+        this.send(ws, userId, { action: "error", message: "You unpinned this room." });
+        return;
+      }
 
       if (rejoinRole) {
         // Reject rejoin if client presents a different public key — pending
@@ -481,8 +582,11 @@ export class UnspokenServer implements DurableObject {
         const peerPublicKey = peerRole === "host" ? pin.host_public_key : pin.guest_public_key;
         const peerSocket = this.occupant(roomId, peerRole);
         const pendingCount = this.pendingCount(roomId, `for_${rejoinRole}`);
+        const dying = pin.destroy_after !== null;
+        // A dying room's peer unpinned and is never coming back: always offline.
+        const peerOnline = !dying && peerSocket !== null;
 
-        this.send(ws, userId, {
+        const payload: Record<string, unknown> = {
           action: "room_joined",
           room_id: roomId,
           role: rejoinRole,
@@ -490,13 +594,19 @@ export class UnspokenServer implements DurableObject {
           peer_user_id: peerUserId,
           peer_public_key: peerPublicKey,
           pinned: true,
-          peer_status: peerSocket ? "online" : "offline",
+          peer_status: peerOnline ? "online" : "offline",
           pending_count: pendingCount,
-        });
+        };
+        if (dying) {
+          payload.unpinned = true;
+          payload.grace_until = isoUtc(Number(pin.destroy_after));
+        }
+        this.send(ws, userId, payload);
 
         this.sendNextPending(ws, userId!, roomId, rejoinRole);
 
-        if (peerSocket) {
+        // Mirrors Python's `if peer_online ...`: a dying room never notifies the unpinner.
+        if (peerOnline && peerSocket) {
           const rejoinerStoredKey = rejoinRole === "host" ? pin.host_public_key : pin.guest_public_key;
           this.send(peerSocket, peerUserId, {
             action: "user_joined",
@@ -592,7 +702,9 @@ export class UnspokenServer implements DurableObject {
     const encryptedAesKey = data.encrypted_aes_key as string;
     const encryptedContent = data.encrypted_content as string;
 
-    if (this.roomExists(roomId)) {
+    // A dying room is read-only: drop silently (still acked below) rather than
+    // queueing for a peer who unpinned and will never come back.
+    if (this.roomExists(roomId) && !this.isDying(roomId)) {
       const peerSocket = this.occupant(roomId, otherRole(role));
       if (peerSocket) {
         // Peer is online, deliver immediately
@@ -670,23 +782,50 @@ export class UnspokenServer implements DurableObject {
   private handleUnpinRoom(ws: WebSocket, data: Record<string, unknown>): void {
     const roomId = data.room_id as string;
     const role = data.role as Role;
+    // 'grace' is opt-in: an unpin without it destroys everything immediately, which
+    // keeps the report flow (and older clients) on the original semantics.
+    const grace = Boolean(data.grace);
     const pin = this.getPin(roomId);
     if (!pin) return;
 
     // Notify peer (by user id — Python notifies any connected peer, in the room or not)
     const peerUserId = otherRole(role) === "host" ? pin.host_user_id : pin.guest_user_id;
     const peerSocket = peerUserId ? this.socketOfUser(peerUserId) : null;
-    if (peerSocket) {
-      this.send(peerSocket, peerUserId, { action: "room_unpinned", room_id: roomId });
-    }
+    const alreadyDying = pin.destroy_after !== null;
 
-    // Clean up
-    this.sql.exec("DELETE FROM pinned_rooms WHERE room_id = ?", roomId);
-    this.deletePendingQueues(roomId);
-    for (const sock of this.ctx.getWebSockets()) {
-      if (this.att(sock).rooms.some((r) => r.roomId === roomId)) this.removeRoomRef(sock, roomId);
+    if (grace && !alreadyDying) {
+      // Keep the room alive read-only so the peer can still read the last messages
+      // and drain its pending queue before it is destroyed.
+      const destroyAfter = Date.now() / 1000 + this.graceSeconds;
+      this.sql.exec(
+        "UPDATE pinned_rooms SET unpinned_by = ?, destroy_after = ? WHERE room_id = ?",
+        role,
+        destroyAfter,
+        roomId
+      );
+      // The unpinner is no longer an occupant of the room.
+      const selfSocket = this.occupant(roomId, role);
+      if (selfSocket && this.att(selfSocket).userId === this.att(ws).userId) {
+        this.removeRoomRef(selfSocket, roomId);
+      }
+      this.scheduleNextPurgeSoon();
+      if (peerSocket) {
+        this.send(peerSocket, peerUserId, {
+          action: "room_unpinned",
+          room_id: roomId,
+          grace_until: isoUtc(destroyAfter),
+        });
+      }
+      logMessage("SYSTEM", "Server", `Room ${roomId} unpinned by ${role}, grace until ${isoUtc(destroyAfter)}`);
+    } else {
+      // Immediate destroy. When the room was already dying this is the surviving peer
+      // closing it — the unpinner is gone, nobody to notify.
+      if (!alreadyDying && peerSocket) {
+        this.send(peerSocket, peerUserId, { action: "room_unpinned", room_id: roomId });
+      }
+      this.destroyRoom(roomId);
+      logMessage("SYSTEM", "Server", `Room ${roomId} unpinned`);
     }
-    logMessage("SYSTEM", "Server", `Room ${roomId} unpinned`);
   }
 
   private handlePendingAck(ws: WebSocket, data: Record<string, unknown>): void {

@@ -2,6 +2,8 @@ export { UnspokenServer } from "./server";
 
 export interface Env {
   SERVER: DurableObjectNamespace;
+  // Mirrors unspoken.py's UNSPOKEN_UNPIN_GRACE_SECONDS env var. Optional; only set for tests.
+  UNSPOKEN_UNPIN_GRACE_SECONDS?: string;
 }
 
 export default {

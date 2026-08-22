@@ -82,7 +82,12 @@ Protocol-compatible TypeScript port of `unspoken.py`. `unspoken.py` is the spec 
   - Durable state (Python's `data/*.json`) lives in DO **SQLite**: `blocked_users`, `pinned_rooms`, `pending_meta`/`pending_chunks`/`pending_counter`, `meta` (next_room_id).
 - **Pending message chunking**: offline-queued messages (up to 5 MB base64 images) are split into 1,000,000-char rows in `pending_chunks` because SQLite rows cap at 2 MB; reassembled on delivery. Live relay never touches storage.
 - **Non-pinned room lifetime == host socket lifetime** (room refs die with their attachments), which matches Python semantics exactly and needs no cleanup sweeps.
-- **`test/protocol-test.mjs`** — integration test (17 steps, ~50 assertions) covering the full protocol including pin flow, stop-and-wait pending delivery, chunking, key-mismatch rejection, and report/block. Run it against both servers when changing either: `node test/protocol-test.mjs ws://localhost:8787` (wrangler dev) and `ws://localhost:8766` (`uv run unspoken.py --no-ssl --port 8766`).
+- **Grace-period unpin** is ported (see "Grace-period unpin" below): `pinned_rooms` carries the
+  extra `unpinned_by`/`destroy_after` columns (added by an `ALTER TABLE` migration for DOs created
+  before the port), and Python's 10-minute purge loop becomes a DO **alarm** armed at the earliest
+  `destroy_after`. `UNSPOKEN_UNPIN_GRACE_SECONDS` is read as a Worker var — unset in production
+  (7 days); the test suite runs `wrangler dev --var UNSPOKEN_UNPIN_GRACE_SECONDS:3` to exercise expiry.
+- **`test/protocol-test.mjs`** — integration test (23 steps, ~69 assertions) covering the full protocol including pin flow, stop-and-wait pending delivery, chunking, key-mismatch rejection, report/block, and grace-period unpin. Run it against both servers when changing either: `node test/protocol-test.mjs ws://localhost:8787` (wrangler dev) and `ws://localhost:8766` (`uv run unspoken.py --no-ssl --port 8766`).
 - **Deploy**: `npm run deploy`. Custom domain `un.luy.li` (requires the `luy.li` zone on Cloudflare DNS). Client connects with Address=`un.luy.li`, Port=`443`, SSL on — note Cloudflare cannot serve port 8765.
 
 ## Encryption
@@ -121,9 +126,27 @@ When a client rejoins a pinned room (`join_room` on a pinned `room_id`), the ser
 
 Rationale: pending messages were encrypted with the stored key. Accepting a new key would make them permanently undecryptable. The client should unpin and start a fresh room if the key is lost.
 
-`save_pinned_rooms()` is called in two places only:
+`save_pinned_rooms()` is called in three places only:
 1. `accept_pin` — room first pinned
-2. `unpin_room` — room deleted from file
+2. `unpin_room` with `grace` — room marked dying (`unpinned_by` + `destroy_after` persisted)
+3. `destroy_room()` — room erased (immediate unpin, or grace period expired)
+
+### Grace-period unpin (dying rooms)
+`unpin_room` takes an opt-in `grace` flag. Without it the room is destroyed immediately (what the
+report flow and "erase now" rely on). With it the room is not destroyed but marked **dying**:
+`unpinned_by` + `destroy_after` are persisted, and the room stays **read-only** for
+`UNSPOKEN_UNPIN_GRACE_SECONDS` (7 days by default) so the other side can still read the last
+messages and drain its pending queue.
+
+While a room is dying:
+- The unpinner cannot rejoin — `error` "You unpinned this room."
+- The survivor can rejoin; `room_joined` carries `unpinned: true` + `grace_until`, still reports
+  `pending_count` and drains the queue, and `peer_status` is always `offline`.
+- `send_message` into it is **dropped but still acked**, so the client never stalls.
+- A plain `unpin_room` (no `grace`) from the survivor erases it at once, notifying nobody.
+- Expiry destroys it: Python sweeps every 10 min (`purge_expired_rooms_loop`) plus on startup;
+  the CF server arms a **Durable Object alarm** at the earliest `destroy_after` instead. Both also
+  purge lazily at the top of `join_room`, so an expired room answers "Room not found".
 
 ### Face ID / Biometric unlock
 Pinned room metadata is protected by biometric authentication (`LocalAuthentication` framework):
