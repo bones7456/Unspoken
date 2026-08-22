@@ -8,7 +8,9 @@ Unspoken 是一款端到端加密的匿名 iOS 一对一聊天 App。它超越�
 - **端到端加密** — RSA-2048 密钥交换，AES-256-GCM 消息加密，服务器永远看不到明文
 - **完全匿名** — 无需账号、手机号或邮箱
 - **固定房间（Pinned Room）** — 让房间在 App 重启、服务器重启后依然存在；对方离线时消息自动排队，上线后送达
+- **告别不打断** — 取消固定不会让房间立刻消失：它会以只读状态保留 7 天，让对方从容读完最后那几句话
 - **图片与表情包** — 发送相册照片，或直接按关键词搜索表情包
+- **按住说话** — 按住麦克风按钮即可说话。对方在线时是实时对讲；对方离线时（固定房间）同样的操作会变成一条语音消息，等对方上线后送达
 - **心率分享** — 通过 Apple Watch 将实时心率分享给对方，对方会以触感震动感受到你的心跳节奏
 - **截图保护** — 聊天内容无法被截图或录屏捕获
 - **自动重连** — Wi-Fi 与蜂窝网络切换或任何断线场景下自动恢复连接
@@ -28,7 +30,7 @@ iOS 客户端 (SwiftUI)  ←—— WSS ——→  Python 服务器  ←—— WS
 ```
 
 - **iOS 客户端** — SwiftUI，[Starscream](https://github.com/daltoniam/Starscream) 处理 WebSocket，CryptoKit + Security framework 负责加密
-- **服务器** — 单文件 Python（约 650 行），`asyncio` + `websockets`，JSON 文件持久化
+- **服务器** — 单文件 Python（约 800 行），`asyncio` + `websockets`，JSON 文件持久化
 - **watchOS 伴侣 App** — HKWorkoutSession 获取实时心率，WatchConnectivity 将 BPM 传至 iPhone
 
 ## 开始使用

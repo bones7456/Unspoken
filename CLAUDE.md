@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Unspoken is an end-to-end encrypted anonymous chat app. This is a mono-repo containing:
 - **Unspoken/** — iOS native client (SwiftUI, the primary project)
-- **Unspoken-server/** — Python WebSocket server (~700 LOC, single file `unspoken.py`)
+- **Unspoken-server/** — Python WebSocket server (~800 LOC, single file `unspoken.py`)
 - **Unspoken-server-cf/** — Cloudflare Workers + Durable Objects server (TypeScript, protocol-compatible port of `unspoken.py`)
 - **Unspoken-web/** — Web client (HTML/JS)
 
@@ -46,7 +46,7 @@ See "Cloudflare Server" section below for architecture.
 
 ## Architecture
 
-### iOS client (~3,600 LOC across ~14 Swift files, MVVM)
+### iOS client (~4,000 LOC across 14 Swift files, MVVM)
 
 `ChatViewModel` (ObservableObject) is the single view model. It lives in `ChatViewModel.swift` (core state, message send, room lifecycle) and is split by concern into extensions:
 - **`ChatViewModel.swift`** — `@Published` state, `init`, key management, `sendMessage`/`sendImage`/voice send, `retryPendingMessages`, `leaveRoom`.
@@ -100,13 +100,15 @@ Hybrid encryption scheme:
 
 ## WebSocket Protocol
 
-JSON-based protocol over WSS. See `TECHNICAL_DOCUMENTATION.md` for full protocol spec.
+JSON-based protocol over WSS. `Unspoken-server/unspoken.py` is the spec — its single
+`handle_connection` dispatch loop is the authoritative list of actions and response fields,
+and `Unspoken-server-cf/test/protocol-test.mjs` pins the observable behaviour of both servers.
 
-**Core actions:** `login`, `create_room`, `join_room`, `send_message`, `typing`, `report_user`, `leave_room`
+**Core actions:** `login`, `create_room`, `join_room`, `send_message`, `typing`, `heart_rate`, `pending_ack`, `report_user`, `leave_room`
 
 **Pin actions:** `request_pin`, `accept_pin`, `reject_pin`, `unpin_room`
 
-**Server-only responses:** `room_created`, `room_joined`, `user_joined`, `user_left`, `room_closed`, `new_message`, `pin_requested`, `pin_accepted`, `pin_rejected`, `room_unpinned`, `peer_status`, `pending_messages`, `error`, `blocked`
+**Server-only responses:** `room_created`, `room_joined`, `user_joined`, `user_left`, `room_closed`, `new_message`, `ack`, `pin_requested`, `pin_accepted`, `pin_rejected`, `room_unpinned`, `peer_status`, `pending_message` (singular — one per `pending_ack`), `error`, `failed`, `login_failed`, `blocked`
 
 **Encrypted message payload types** (the `type` field inside the AES-GCM plaintext wrapped by `wrapPayload`/`unwrapPayload`, carried by `send_message`/`new_message`/`pending_message`): `text`, `image`, `audio` (voice message), `voice_stream` (live walkie-talkie segment), `voice_end` (walkie-talkie end marker). The server never inspects these — it relays/queues the opaque ciphertext — so voice needed **no server change**. See "Voice Feature".
 
@@ -148,6 +150,17 @@ While a room is dying:
   the CF server arms a **Durable Object alarm** at the earliest `destroy_after` instead. Both also
   purge lazily at the top of `join_room`, so an expired room answers "Room not found".
 
+**Client side — farewell state (`ChatViewModel.enterFarewell`)**
+A room ending no longer closes the chat screen; the conversation stays on screen read-only.
+`FarewellReason` is `.unpinnedByPeer` or `.hostClosed`; `enterFarewell(reason:roomAlive:graceUntil:draining:)`
+clears `peerPublicKey` (shuts the sending gate — receiving still works, decryption uses our own
+private key), stops heart rate and voice, and appends the reason as a system line.
+- `roomAlive: true` (dying room) keeps the socket up so a pending queue can still drain;
+  `farewellDraining` arms a **20s** timeout, since an undecryptable message is never acked.
+- `roomAlive: false` (room really gone) also freezes reconnect/rejoin and drops the pending placeholder.
+Entered from `room_closed`, `room_unpinned`, a rejoin into a dying room (`unpinned` + `grace_until`
+on `room_joined`), and a "room not found" error. `ContentView` swaps the input bar for a farewell bar.
+
 ### Face ID / Biometric unlock
 Pinned room metadata is protected by biometric authentication (`LocalAuthentication` framework):
 - `ChatViewModel.init()` restores saved key pair from UserDefaults (falls back to generating new keys if none saved). Room metadata is NOT loaded at launch.
@@ -155,7 +168,7 @@ Pinned room metadata is protected by biometric authentication (`LocalAuthenticat
 - Double-tapping the "Unspoken" title in `RoomSelectionView` triggers `unlockPinnedRoom()` when `hasSavedPinnedRoom && !isPinned` (no visible icon)
 - `unlockPinnedRoom()` → `LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics)` → on success, `loadPinnedRoom()` restores room metadata, sets `isPinned = true`, and the rejoin UI appears
 - Fallback: if biometrics are unavailable (e.g. simulator, no enrolled Face ID), loads directly without auth
-- `NSFaceIDUsageDescription` is set in `Info.plist` for the system permission dialog
+- `NSFaceIDUsageDescription` is set as `INFOPLIST_KEY_NSFaceIDUsageDescription` in the Xcode build settings (`project.pbxproj`), not in `Unspoken/Info.plist` — the target uses `GENERATE_INFOPLIST_FILE = YES`. Same for `NSHealthShareUsageDescription`/`NSHealthUpdateUsageDescription`; only Camera/Microphone/HealthUpdate live in the checked-in `Info.plist`.
 
 ## Heart Rate Feature
 
@@ -190,12 +203,12 @@ UI layout: `[peerBPM rose-pink] [heart icon] [myBPM red]`
 - Own BPM text and heart icon (sending): `.red`
 - Inactive heart (not sending, not receiving): `.white` outline
 
-`peerIsOnline = true` is set in two places:
-- `room_joined` handler: when `peer_public_key` is present (guest joins, host already in room)
-- `user_joined` handler: when host receives guest joining
-- `peer_status: online` response (pinned rooms)
+`peerIsOnline` is set in one shared block in `ChatViewModel+WebSocket.swift` that handles
+`room_joined`/`user_joined` alike, via two branches:
+- If the response carries `peer_status` (pinned rooms): `peerIsOnline = (peer_status == "online")`.
+- Otherwise (non-pinned join, where presence is implied by the peer key): `peerIsOnline = true`.
 
-`peerIsOnline = false` is set in `user_left` handler.
+`peerIsOnline = false` is set in the `user_left` handler, and in `leaveRoom()`/`enterFarewell()`.
 
 ### Start flow (startHeartRateMode)
 1. Check `HKHealthStore.isHealthDataAvailable()` → error if false
@@ -228,7 +241,7 @@ BPM = -1 is the stop signal.
 Recursive `DispatchQueue.asyncAfter` — reads `peerBPM` fresh each cycle:
 ```
 interval = 60.0 / bpm
-gap = 0.5 - 0.0021 * bpm   (lub-dub spacing)
+gap = max(0.05, 0.5 - 0.0021 * bpm)   (lub-dub spacing, floored so fast rates stay audible)
 heavy.impactOccurred()
 → after gap: medium.impactOccurred()
 → after (interval - gap): beatLoop recurses
@@ -245,7 +258,7 @@ Stops when `hapticLoopActive == false` or `peerBPM == nil`.
 Calls `stopHeartRateMode()` (notifyPeer: true — sends -1 to peer) then `stopPeerHeartRate()`.
 
 ### WCAdapter
-`private class WCAdapter: NSObject, WCSessionDelegate` at bottom of ContentView.swift.
+`class WCAdapter: NSObject, WCSessionDelegate` in its own file `Unspoken/WCAdapter.swift`.
 Receives `["bpm": X]` from Watch → calls closure → `currentBPM = bpm` on main thread.
 
 ### watchOS companion app (UnspokenWatch Watch App/)
