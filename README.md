@@ -10,8 +10,9 @@ Unspoken is an end-to-end encrypted, anonymous one-on-one chat app for iOS. It g
 - **Pinned rooms** — make a room persistent across app restarts and server restarts; messages queue for offline peers and deliver on reconnect
 - **Endings that don't cut mid-sentence** — unpinning doesn't yank the room away: it stays readable for 7 days so the other person can finish reading the last messages
 - **Image & meme sharing** — send photos from your camera roll or search for memes by keyword
-- **Push-to-talk voice** — hold the mic button to talk. If your peer is online it's a live walkie-talkie; if they're offline in a pinned room the same hold becomes a voice message that waits for them
+- **Push-to-talk voice** — hold the mic button to talk, release to send. If your peer is offline in a pinned room the voice message simply waits for them
 - **Heart rate sharing** — share your live heart rate with your peer via Apple Watch; they feel it as a haptic lub-dub rhythm
+- **Connection check** — a Speed Test on the start screen rehearses a whole conversation against the server and tells you in plain words how it will feel: how fast messages land, how long a photo or a voice message takes to send
 - **Screenshot protection** — chat content is blocked from screenshots and screen recordings
 - **Auto-reconnect** — seamlessly reconnects on Wi-Fi/cellular switching or any other interruption
 

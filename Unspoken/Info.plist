@@ -7,7 +7,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Camera access is used to take photos to share in your private encrypted chat.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Microphone access is used to record voice messages and walkie-talkie audio for your private encrypted chat.</string>
+	<string>Microphone access is used to record voice messages for your private encrypted chat.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Used to start a workout session on Apple Watch to stream your real-time heart rate</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>

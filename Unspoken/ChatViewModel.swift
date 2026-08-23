@@ -47,8 +47,7 @@ class ChatViewModel: ObservableObject {
     @Published var currentBPM: Int? = nil
     @Published var peerBPM: Int?
     @Published var heartRateModeError: String?
-    @Published var isTalking: Bool = false        // self is transmitting (walkie-talkie live, or recording a voice message)
-    @Published var peerIsTalking: Bool = false    // currently receiving a live walkie-talkie stream
+    @Published var isTalking: Bool = false        // self is recording a voice message
     @Published var voiceError: String?            // mic denied etc., surfaced as an alert
     @Published var peerLubTick: Int = 0
     @Published var peerDubTick: Int = 0
@@ -92,14 +91,10 @@ class ChatViewModel: ObservableObject {
     var wcAdapter: WCAdapter?
     var heartRateBackgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var nextSeq: Int = 1
-    // Voice: shared bubble player (observed by MessageView), live capture + stream playback.
+    // Voice: shared bubble player (observed by MessageView) + push-to-talk capture.
     let voiceMessagePlayer = VoiceMessagePlayer()
     private let voiceCapture = VoiceCapture()
-    private let voiceStreamPlayer = VoiceStreamPlayer()
-    private var talkStartDate: Date?
-    private var talkMode: VoiceCapture.Mode = .stream
     private var talkRequested: Bool = false       // button held; guards the async mic-permission race
-    private var pendingVoiceEndSeconds: Int?
     var reconnectTimer: Timer?
     var reconnectAttempts: Int = 0
     var isUserLeft: Bool = false
@@ -124,15 +119,6 @@ class ChatViewModel: ObservableObject {
         setupWatchConnectivity()
         setupBackgroundTaskObservers()
         setupNetworkMonitor()
-
-        // When a received walkie-talkie stream ends and its buffer drains, drop a summary line.
-        voiceStreamPlayer.onFinished = { [weak self] in
-            guard let self else { return }
-            self.peerIsTalking = false
-            let label = self.pendingVoiceEndSeconds.map { formatVoiceDuration(TimeInterval($0)) } ?? ""
-            self.pendingVoiceEndSeconds = nil
-            self.messages.append(Message(content: "🎙️ Walkie-talkie \(label)", isFromMe: false, isTyping: false, isSystem: true))
-        }
     }
 
     private func setupBackgroundTaskObservers() {
@@ -342,7 +328,6 @@ class ChatViewModel: ObservableObject {
         stopHeartRateMode(notifyPeer: false)
         stopPeerHeartRate()
         abortVoiceCapture()
-        resetPeerVoiceStream()
 
         if !roomAlive {
             // Nothing left on the server: stop reconnecting, rejoining and draining.
@@ -404,7 +389,6 @@ class ChatViewModel: ObservableObject {
         stopHeartRateMode()
         stopPeerHeartRate()
         abortVoiceCapture()
-        resetPeerVoiceStream()
         voiceMessagePlayer.stop()
         sendJSON(["action": "leave_room", "room_id": roomId, "role": role, "user_id": userId])
 
@@ -497,28 +481,21 @@ class ChatViewModel: ObservableObject {
         messages.append(Message(content: "", isFromMe: true, isTyping: false, imageData: imageData, seq: seq, quote: quote))
     }
 
-    // MARK: - Voice (walkie-talkie live stream + offline voice message)
+    // MARK: - Voice (push-to-talk voice messages)
 
-    /// Push-to-talk pressed. Streams live when the peer is online; otherwise (pinned room,
-    /// peer offline) records the whole hold into a single queued voice message.
+    /// Push-to-talk pressed: record the whole hold into one voice message, sent on release.
+    /// Only started when the result can actually be delivered — live to an online peer, or
+    /// queued for an offline one in a pinned room.
     func startTalking() {
         guard peerPublicKey != nil, !isTalking, !talkRequested else { return }
-        let mode: VoiceCapture.Mode
-        if peerIsOnline { mode = .stream }
-        else if isPinned { mode = .file }
-        else { return }   // non-pinned + peer offline: nothing to send
+        guard peerIsOnline || isPinned else { return }   // non-pinned + peer offline: nowhere to go
 
         talkRequested = true
-        talkMode = mode
-        talkStartDate = Date()
-        voiceCapture.onSegment = { [weak self] data in self?.sendVoiceSegment(data) }
         voiceCapture.onFileComplete = { [weak self] data, dur in self?.sendVoiceMessage(data, duration: dur) }
-        voiceCapture.start(mode: mode) { [weak self] ok in
+        voiceCapture.start { [weak self] ok in
             guard let self else { return }
             // Button was released before the mic became ready — tear down without emitting.
             guard self.talkRequested else {
-                self.talkStartDate = nil
-                self.voiceCapture.onSegment = nil
                 self.voiceCapture.onFileComplete = nil
                 self.voiceCapture.stop { }
                 return
@@ -532,58 +509,18 @@ class ChatViewModel: ObservableObject {
         }
     }
 
-    /// Push-to-talk released (also called when the peer drops mid-stream).
+    /// Push-to-talk released. The recording is flushed and `sendVoiceMessage` appends its bubble.
     func stopTalking() {
         // A start may still be pending its permission callback; cancelling the request makes
         // that callback tear the capture down instead of going live.
         guard isTalking else { talkRequested = false; return }
         talkRequested = false
-        let mode = talkMode
-        let duration = talkStartDate.map { Date().timeIntervalSince($0) } ?? 0
-        talkStartDate = nil
         isTalking = false
-        voiceCapture.stop { [weak self] in
-            guard let self else { return }
-            if mode == .stream {
-                // The trailing segment (if any) has already been queued to the socket by now.
-                self.sendVoiceEnd(seconds: Int(duration.rounded()))
-                self.messages.append(Message(content: "🎙️ Walkie-talkie \(formatVoiceDuration(duration))", isFromMe: true, isTyping: false, isSystem: true))
-            }
-            // .file mode appends its own playable bubble from sendVoiceMessage.
-        }
+        voiceCapture.stop { }
     }
 
-    /// A live walkie-talkie segment. Ephemeral: relayed via send_message with no seq (no ack
-    /// round-trip) and guarded on peer presence so nothing is sent once the peer is offline.
-    private func sendVoiceSegment(_ data: Data) {
-        guard peerIsOnline, peerPublicKey != nil else { return }
-        let payload = wrapPayload(type: "voice_stream", data: data.base64EncodedString())
-        guard let enc = encryptMessage(payload) else { return }
-        sendJSON([
-            "action": "send_message",
-            "room_id": roomId,
-            "role": role,
-            "encrypted_aes_key": enc.0,
-            "encrypted_content": enc.1
-        ])
-    }
-
-    /// End-of-transmission marker for the walkie-talkie stream (data = seconds spoken).
-    private func sendVoiceEnd(seconds: Int) {
-        guard peerIsOnline, peerPublicKey != nil else { return }
-        let payload = wrapPayload(type: "voice_end", data: String(seconds))
-        guard let enc = encryptMessage(payload) else { return }
-        sendJSON([
-            "action": "send_message",
-            "room_id": roomId,
-            "role": role,
-            "encrypted_aes_key": enc.0,
-            "encrypted_content": enc.1
-        ])
-    }
-
-    /// A persistent voice message (peer offline in a pinned room). Goes through send_message
-    /// like an image so the server queues it and delivers it when the peer returns.
+    /// One voice message. Goes through send_message like an image: relayed straight to an online
+    /// peer, or queued by the server (pinned room) and delivered when the peer comes back.
     func sendVoiceMessage(_ data: Data, duration: TimeInterval) {
         guard peerPublicKey != nil else { return }
         guard data.count < 5 * 1024 * 1024 else {
@@ -604,34 +541,14 @@ class ChatViewModel: ObservableObject {
         messages.append(Message(content: "", isFromMe: true, isTyping: false, audioData: data, audioDuration: duration, seq: seq))
     }
 
-    // Receiver hooks, called from the WebSocket layer.
-    func receiveVoiceSegment(_ data: Data) {
-        peerIsTalking = true
-        voiceStreamPlayer.enqueue(data)
-    }
-
-    func receiveVoiceEnd(seconds: Int) {
-        pendingVoiceEndSeconds = seconds
-        voiceStreamPlayer.finish()
-    }
-
-    /// Tear down an in-progress capture without emitting its trailing segment / file
-    /// (used when leaving the room mid-transmission).
-    private func abortVoiceCapture() {
+    /// Tear down an in-progress capture without emitting the recording (used when leaving the
+    /// room or losing the peer mid-hold, where there is no longer anywhere to send it).
+    func abortVoiceCapture() {
         talkRequested = false
         guard isTalking else { return }
         isTalking = false
-        talkStartDate = nil
-        voiceCapture.onSegment = nil
         voiceCapture.onFileComplete = nil
         voiceCapture.stop { }
-    }
-
-    /// Peer went offline / room closed mid-stream: drop any half-played buffer silently.
-    func resetPeerVoiceStream() {
-        voiceStreamPlayer.reset()
-        peerIsTalking = false
-        pendingVoiceEndSeconds = nil
     }
 
     func sendJSON(_ dictionary: [String: Any]) {

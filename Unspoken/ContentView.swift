@@ -154,8 +154,8 @@ struct ContentView: View {
     @State private var showUnpinDialog: Bool = false
 
     var canSendMessage: Bool { viewModel.peerPublicKey != nil }
-    // Voice works when the peer is online (walkie-talkie) or, in a pinned room, offline
-    // (recorded as a queued voice message). Non-pinned + offline peer means the room is gone.
+    // A voice message needs somewhere to land: an online peer, or a pinned room where the
+    // server can queue it. Non-pinned + offline peer means the room is gone.
     var canUseVoice: Bool { viewModel.peerPublicKey != nil && (viewModel.peerIsOnline || viewModel.isPinned) }
 
     var body: some View {
@@ -532,20 +532,11 @@ struct ContentView: View {
                 .background(Color.white.opacity(0.08))
             }
 
-            // Voice status banner: peer transmitting, or our own recording/live state.
-            if viewModel.peerIsTalking {
-                HStack(spacing: 6) {
-                    Image(systemName: "waveform")
-                    Text("Peer is talking…")
-                    Spacer()
-                }
-                .font(.caption)
-                .foregroundColor(Color(red: 1.0, green: 0.6, blue: 0.8))
-                .padding(.horizontal, 15).padding(.vertical, 4)
-            } else if viewModel.isTalking {
+            // Recording indicator while the push-to-talk button is held.
+            if viewModel.isTalking {
                 HStack(spacing: 6) {
                     Circle().fill(Color.red).frame(width: 8, height: 8)
-                    Text(viewModel.peerIsOnline ? "Live — release to stop" : "Recording — release to send")
+                    Text("Recording — release to send")
                     Spacer()
                 }
                 .font(.caption)
@@ -561,8 +552,7 @@ struct ContentView: View {
                 }
                 .disabled(!canSendMessage)
 
-                // Push-to-talk: hold to stream live (peer online) or record a voice message
-                // (pinned room, peer offline); release to send.
+                // Push-to-talk: hold to record a voice message, release to send.
                 if canUseVoice {
                     Image(systemName: viewModel.isTalking ? "waveform" : "mic.fill")
                         .foregroundColor(viewModel.isTalking ? .red : .white)

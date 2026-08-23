@@ -23,6 +23,8 @@ interface Attachment {
   userId: string | null;
   publicKey: string;
   rooms: RoomRef[];
+  /** Bytes this connection has spent on speed tests (up+down), see SPEEDTEST_MAX_BYTES_PER_CONN. */
+  speedtestBytes?: number;
 }
 
 interface PinRow extends Record<string, SqlStorageValue> {
@@ -49,6 +51,9 @@ const MAX_PENDING_BYTES = 5 * 1024 * 1024; // 5 MB, same as unspoken.py
 const DEFAULT_UNPIN_GRACE_SECONDS = 7 * 24 * 3600;
 const PENDING_CHUNK_CHARS = 1_000_000; // 1 MB per SQLite row (2 MB row limit)
 const MAX_PUBLIC_KEY_LEN = 8192;
+// Speed test ('speedtest' action) — same limits as unspoken.py.
+const SPEEDTEST_MAX_PAYLOAD = 256 * 1024;
+const SPEEDTEST_MAX_BYTES_PER_CONN = 16 * 1024 * 1024;
 
 const TRUNCATE_KEYS = new Set([
   "encrypted_content",
@@ -57,8 +62,31 @@ const TRUNCATE_KEYS = new Set([
   "peer_public_key",
   "host_public_key",
   "guest_public_key",
+  "payload",
 ]);
 const TRUNCATE_LEN = 16;
+
+const B64_CODES = new Uint8Array(
+  Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", (c) => c.charCodeAt(0))
+);
+
+/**
+ * n characters of incompressible filler, so a compressing transport can't fake the result.
+ * Kept deliberately cheap — the DO is single-threaded, and slow generation would cap the
+ * download speed the client is trying to measure.
+ */
+function speedtestPayload(n: number): string {
+  const buf = new Uint8Array(n);
+  for (let off = 0; off < n; off += 65536) {
+    crypto.getRandomValues(buf.subarray(off, Math.min(off + 65536, n))); // 64 KB per call max
+  }
+  for (let i = 0; i < n; i++) buf[i] = B64_CODES[buf[i] & 63];
+  let out = "";
+  for (let off = 0; off < n; off += 8192) {
+    out += String.fromCharCode(...buf.subarray(off, Math.min(off + 8192, n)));
+  }
+  return out;
+}
 
 function otherRole(role: Role): Role {
   return role === "host" ? "guest" : "host";
@@ -487,6 +515,9 @@ export class UnspokenServer implements DurableObject {
       case "report_user":
         this.handleReportUser(ws, data);
         break;
+      case "speedtest":
+        this.handleSpeedTest(ws, data);
+        break;
       default:
         break;
     }
@@ -881,6 +912,37 @@ export class UnspokenServer implements DurableObject {
   }
 
   /** Port of Python cleanup_user: runs on disconnect for each room this socket occupies. */
+  /**
+   * Latency / throughput probe for the client's Speed Test screen. Deliberately stateless:
+   * no room, no peer, nothing persisted. Three modes mirror what a chat actually does —
+   * 'echo' round-trips a message (text, voice segment), 'upload' absorbs one (sending a
+   * photo), 'download' generates one (receiving).
+   */
+  private handleSpeedTest(ws: WebSocket, data: Record<string, unknown>): void {
+    const a = this.att(ws);
+    if (!a.userId) return; // must log in first
+    const seq = data.seq;
+    const mode = (data.mode as string) ?? "echo";
+    const payload = (data.payload as string) ?? "";
+    const want = Math.max(0, Math.trunc(Number(data.size ?? 0) || 0));
+    const upBytes = payload.length;
+    const downBytes = mode === "echo" ? upBytes : mode === "download" ? want : 0;
+    if (upBytes > SPEEDTEST_MAX_PAYLOAD || want > SPEEDTEST_MAX_PAYLOAD) {
+      this.send(ws, a.userId, { action: "error", message: "Speed test payload too large." });
+      return;
+    }
+    a.speedtestBytes = (a.speedtestBytes ?? 0) + upBytes + downBytes;
+    this.setAtt(ws, a);
+    if (a.speedtestBytes > SPEEDTEST_MAX_BYTES_PER_CONN) {
+      this.send(ws, a.userId, { action: "error", message: "Speed test quota exceeded." });
+      return;
+    }
+    const result: Record<string, unknown> = { action: "speedtest_result", seq, size: upBytes };
+    if (mode === "echo") result.payload = payload;
+    else if (mode === "download") result.payload = speedtestPayload(downBytes);
+    this.send(ws, a.userId, result);
+  }
+
   private cleanupSocket(ws: WebSocket): void {
     const a = this.att(ws);
     if (!a.userId) {

@@ -62,6 +62,7 @@ struct RoomSelectionView: View {
     @State private var isJoining = false
     @State private var isCreating = false
     @State private var entryToForget: PinnedRoomEntry?
+    @State private var showSpeedTest = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -218,6 +219,20 @@ struct RoomSelectionView: View {
                             }
                             .disabled(!canCreate)
                             .scaleEffect(isCreating ? 0.97 : 1.0)
+
+                            // Connection check against the server configured above — handy
+                            // before pinning a room on a network you don't trust yet.
+                            Button(action: { showSpeedTest = true }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "speedometer")
+                                    Text("Speed Test")
+                                }
+                                .font(.subheadline.weight(.medium))
+                                .foregroundColor(.white.opacity(0.85))
+                                .frame(width: cardWidth, height: 40)
+                                .background(Color.white.opacity(0.14))
+                                .cornerRadius(10)
+                            }
                         }
 
                         if let error = errorMessage {
@@ -263,6 +278,13 @@ struct RoomSelectionView: View {
                     .frame(minHeight: geometry.size.height)
                 }
             }
+        }
+        .sheet(isPresented: $showSpeedTest) {
+            SpeedTestView(host: chatViewModel.serverHost,
+                          port: chatViewModel.serverPort,
+                          useSSL: chatViewModel.useSSL,
+                          userId: chatViewModel.userId,
+                          publicKeyBase64: chatViewModel.getPublicKeyBase64())
         }
         .onReceive(chatViewModel.$isChatOpen) { isChatOpen in
             if isChatOpen {

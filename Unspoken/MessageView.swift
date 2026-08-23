@@ -246,22 +246,26 @@ private struct VoiceBubbleView: View {
 
     var body: some View {
         // Track length scales gently with duration so a 2s clip and a 40s clip look different.
-        let trackW = max(50, min(130, CGFloat(duration) * 7))
-        HStack(spacing: 8) {
+        // Kept long and slim: the bubble is only one text line tall, so width is what carries
+        // the "this is a recording" read.
+        let trackW = max(60, min(170, 45 + CGFloat(duration) * 4))
+        // Sized to sit at the same height as a one-line text bubble — the layout is compact
+        // everywhere else, and a voice message shouldn't tower over the words around it.
+        HStack(spacing: 6) {
             Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                .font(.system(size: 26))
+                .font(.system(size: 18))
                 .foregroundColor(.white)
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.35)).frame(width: trackW, height: 3)
+                Capsule().fill(Color.white.opacity(0.35)).frame(width: trackW, height: 2.5)
                 Capsule().fill(Color.white)
-                    .frame(width: trackW * CGFloat(isPlaying ? player.progress : 0), height: 3)
+                    .frame(width: trackW * CGFloat(isPlaying ? player.progress : 0), height: 2.5)
             }
             Text(formatVoiceDuration(duration))
-                .font(.caption.monospacedDigit())
+                .font(.caption2.monospacedDigit())
                 .foregroundColor(.white.opacity(0.9))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture {
             if let data = message.audioData { player.toggle(id: message.id, data: data) }

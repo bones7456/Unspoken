@@ -399,6 +399,35 @@ async function main() {
   eq((await e.expect("error")).message, "Too many active rooms. Please close existing rooms first.", "room limit error");
   e.close();
 
+  step("Speed test: echo / upload / download, and its guards");
+  const st = await connectAndLogin("ST", uid("st"), "PEM_ST");
+  const probe = "x".repeat(2048);
+  st.send({ action: "speedtest", seq: 1, mode: "echo", payload: probe });
+  const echoed = await st.expect("speedtest_result");
+  eq(echoed.seq, 1, "speedtest echo seq");
+  eq(echoed.size, probe.length, "speedtest echo reports received size");
+  eq(echoed.payload === probe, true, "speedtest echo returns the payload unchanged");
+  st.send({ action: "speedtest", seq: 2, mode: "upload", payload: probe });
+  const absorbed = await st.expect("speedtest_result");
+  eq(absorbed.size, probe.length, "speedtest upload reports received size");
+  eq(absorbed.payload === undefined, true, "speedtest upload sends no payload back");
+  st.send({ action: "speedtest", seq: 3, mode: "download", size: 4096 });
+  const down = await st.expect("speedtest_result");
+  eq(down.payload.length, 4096, "speedtest download returns the requested size");
+  eq(down.size, 0, "speedtest download received nothing");
+  st.send({ action: "speedtest", seq: 4, mode: "echo", payload: "y".repeat(256 * 1024 + 1) });
+  eq((await st.expect("error")).message, "Speed test payload too large.", "speedtest oversize payload rejected");
+  st.send({ action: "speedtest", seq: 5, mode: "download", size: 256 * 1024 + 1 });
+  eq((await st.expect("error")).message, "Speed test payload too large.", "speedtest oversize download rejected");
+  st.close();
+
+  step("Speed test is refused before login");
+  const anon = new Client("ANON");
+  await anon.connect();
+  anon.send({ action: "speedtest", seq: 1, mode: "echo", payload: "hello" });
+  await anon.expectNone("speedtest_result");
+  anon.close();
+
   a.close();
   c.close();
   console.log(`\nAll steps passed (${passed} assertions).`);

@@ -2,12 +2,10 @@
 //  VoiceChat.swift
 //  Unspoken
 //
-//  Voice audio pipeline shared by the walkie-talkie (live streaming) and the
-//  offline voice-message (single file) paths:
+//  Voice audio pipeline behind push-to-talk voice messages:
 //    • VoiceAudioSession  — one shared AVAudioSession held for the whole voice lifecycle
 //    • PCMRingBuffer      — real-time-safe hand-off from the mic tap to the encoder queue
-//    • VoiceCapture       — mic → AAC/m4a, either ~1s streamed segments or one whole file
-//    • VoiceStreamPlayer  — receiver-side jitter buffer + gapless-ish playback of live segments
+//    • VoiceCapture       — mic → one AAC/m4a recording per hold
 //    • VoiceMessagePlayer — play/pause a completed voice-message bubble (observed by MessageView)
 //
 
@@ -22,7 +20,7 @@ func voiceDurationOf(_ data: Data) -> TimeInterval {
     (try? AVAudioPlayer(data: data))?.duration ?? 0
 }
 
-/// "m:ss" for durations shown in bubbles and walkie-talkie summaries.
+/// "m:ss" for the durations shown on voice bubbles.
 func formatVoiceDuration(_ seconds: TimeInterval) -> String {
     let s = max(0, Int(seconds.rounded()))
     return String(format: "%d:%02d", s / 60, s % 60)
@@ -32,10 +30,11 @@ func formatVoiceDuration(_ seconds: TimeInterval) -> String {
 
 /// Reference-counted owner of the app's AVAudioSession while any voice activity is running.
 ///
-/// Capture and playback must not configure the session for themselves: a walkie-talkie has both
-/// happening at once. If playback switched the category to `.playback` it would knock the mic off
-/// the route and silence the local transmission mid-sentence, and deactivating the session when
-/// the PTT button is released would cut the peer's playback short. So the session is configured
+/// Capture and playback must not configure the session for themselves: they overlap — a received
+/// voice message can still be playing when the user starts holding the mic button. If playback
+/// switched the category to `.playback` it would knock the mic off the route mid-recording, and
+/// deactivating the session when the PTT button is released would cut a playing bubble short.
+/// So the session is configured
 /// once as `.playAndRecord` (+ `.mixWithOthers`), stays that way for as long as *anything* is
 /// capturing or playing, and is only deactivated when the last holder lets go.
 final class VoiceAudioSession {
@@ -178,19 +177,13 @@ final class PCMRingBuffer {
 
 // MARK: - VoiceCapture (mic → AAC segments or one file)
 
-/// Captures microphone audio through AVAudioEngine and encodes it to AAC/m4a.
-/// In `.stream` mode it emits a self-contained ~1s segment via `onSegment` roughly
-/// once a second; in `.file` mode it accumulates the whole recording and emits it
-/// once via `onFileComplete`. All callbacks are delivered on the main thread.
+/// Captures microphone audio through AVAudioEngine and encodes the whole hold to one
+/// AAC/m4a recording, emitted via `onFileComplete` on the main thread.
 ///
-/// The mic tap only pushes PCM into a ring buffer; encoding, segment rotation and every disk
-/// access happen on `ioQueue`, driven by a timer that drains the ring ~10x a second.
+/// The mic tap only pushes PCM into a ring buffer; encoding and every disk access happen on
+/// `ioQueue`, driven by a timer that drains the ring ~10x a second.
 final class VoiceCapture {
-    enum Mode { case stream, file }
-
-    /// Called on the main thread with each ~1s AAC segment (stream mode).
-    var onSegment: ((Data) -> Void)?
-    /// Called on the main thread with the whole recording + its duration (file mode).
+    /// Called on the main thread with the whole recording + its duration.
     var onFileComplete: ((Data, TimeInterval) -> Void)?
 
     private let engine = AVAudioEngine()
@@ -209,19 +202,16 @@ final class VoiceCapture {
     private var ring: PCMRingBuffer?
     private var drainBuffer: AVAudioPCMBuffer?
     private var encodeSettings: [String: Any] = [:]
-    private var mode: Mode = .stream
     private var sampleRate: Double = 48000
-    private var segmentFrameThreshold: AVAudioFramePosition = 48000  // 1s worth of frames
     private var currentFile: AVAudioFile?
     private var currentURL: URL?
-    private var framesInSegment: AVAudioFramePosition = 0
     private var totalFrames: AVAudioFramePosition = 0
 
     // MARK: Start / stop
 
     /// Requests mic permission, takes the shared session and starts capturing.
     /// `completion(true)` on the main thread once audio is flowing, `false` if denied/failed.
-    func start(mode: Mode, completion: @escaping (Bool) -> Void) {
+    func start(completion: @escaping (Bool) -> Void) {
         requestPermission { [weak self] granted in
             DispatchQueue.main.async {
                 guard let self else { completion(false); return }
@@ -239,7 +229,7 @@ final class VoiceCapture {
                 }
 
                 let ring = PCMRingBuffer(capacityFrames: Int(rate * 2))   // ~2s of headroom
-                self.configureEncoder(mode: mode, rate: rate, ring: ring)
+                self.configureEncoder(rate: rate, ring: ring)
 
                 do {
                     self.engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { buffer, _ in
@@ -262,9 +252,8 @@ final class VoiceCapture {
         }
     }
 
-    /// Stops capturing and flushes the trailing segment / whole file, then calls
-    /// `completion` on the main thread *after* the final emission is queued so callers
-    /// can safely send an end marker knowing the last segment went out first.
+    /// Stops capturing and flushes the recording, then calls `completion` on the main thread
+    /// *after* `onFileComplete` has been delivered.
     func stop(completion: @escaping () -> Void) {
         guard running else {
             releaseSession()
@@ -284,9 +273,7 @@ final class VoiceCapture {
             guard let self else { DispatchQueue.main.async(execute: completion); return }
             self.drain()                    // flush whatever the tap left in the ring
             let url = self.currentURL
-            let mode = self.mode
             let duration = Double(self.totalFrames) / self.sampleRate
-            let partialFrames = self.framesInSegment
             self.currentFile = nil          // finalize/flush the m4a on disk
             self.currentURL = nil
             self.ring = nil
@@ -300,11 +287,7 @@ final class VoiceCapture {
 
             DispatchQueue.main.async {
                 if let data = payload, !data.isEmpty {
-                    if mode == .file {
-                        self.onFileComplete?(data, duration)
-                    } else if partialFrames > 0 {
-                        self.onSegment?(data)
-                    }
+                    self.onFileComplete?(data, duration)
                 }
                 completion()
             }
@@ -327,12 +310,9 @@ final class VoiceCapture {
         timer.resume()
     }
 
-    private func configureEncoder(mode: Mode, rate: Double, ring: PCMRingBuffer) {
+    private func configureEncoder(rate: Double, ring: PCMRingBuffer) {
         ioQueue.sync {
-            self.mode = mode
             self.sampleRate = rate
-            self.segmentFrameThreshold = AVAudioFramePosition(rate)   // ~1s per streamed segment
-            self.framesInSegment = 0
             self.totalFrames = 0
             self.ring = ring
             // Mono throughout: PCMRingBuffer already downmixed whatever the input route gave us.
@@ -351,7 +331,7 @@ final class VoiceCapture {
         }
     }
 
-    /// Encoder-queue only: drains everything the tap has produced, rotating segments as they fill.
+    /// Encoder-queue only: drains everything the tap has produced into the recording.
     private func drain() {
         guard let ring, let buffer = drainBuffer else { return }
         while true {
@@ -370,22 +350,7 @@ final class VoiceCapture {
             print("VoiceCapture.write error: \(error)")
             return
         }
-        framesInSegment += frames
         totalFrames += frames
-        if mode == .stream && framesInSegment >= segmentFrameThreshold { rotateSegment() }
-    }
-
-    /// Finalize the current segment, emit its bytes, and open a fresh file.
-    private func rotateSegment() {
-        guard let url = currentURL else { return }
-        currentFile = nil          // flush to disk
-        let data = try? Data(contentsOf: url)
-        try? FileManager.default.removeItem(at: url)
-        framesInSegment = 0
-        if let data, !data.isEmpty {
-            DispatchQueue.main.async { self.onSegment?(data) }
-        }
-        startNewFile()
     }
 
     private func startNewFile() {
@@ -418,112 +383,6 @@ final class VoiceCapture {
         } else {
             AVAudioSession.sharedInstance().requestRecordPermission(handler)
         }
-    }
-}
-
-// MARK: - VoiceStreamPlayer (receiver jitter buffer + playback)
-
-/// Buffers incoming live walkie-talkie segments and plays them back-to-back through
-/// an AVQueuePlayer. Playback starts only after `bufferTarget` segments have arrived
-/// (~2s cushion) so ordinary network jitter never starves the queue. Must be used on main.
-final class VoiceStreamPlayer {
-    /// Called on the main thread once the stream has ended *and* the queue has drained.
-    var onFinished: (() -> Void)?
-
-    private let player = AVQueuePlayer()
-    private var buffered: [AVPlayerItem] = []
-    private var tempURLs: [URL] = []
-    private var started = false
-    private var ended = false
-    private var sessionHeld = false
-    private var observer: NSKeyValueObservation?
-    private let bufferTarget = 2       // ~2 x 1s segments before playback begins
-
-    init() {
-        player.actionAtItemEnd = .advance
-        player.automaticallyWaitsToMinimizeStalling = false
-    }
-
-    func enqueue(_ data: Data) {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vr_\(UUID().uuidString).m4a")
-        do { try data.write(to: url) } catch { return }
-        tempURLs.append(url)
-        let item = AVPlayerItem(url: url)
-
-        if started {
-            player.insert(item, after: player.items().last)
-            if player.timeControlStatus != .playing { player.play() }  // resume after an underrun
-        } else {
-            buffered.append(item)
-            if buffered.count >= bufferTarget { startPlayback() }
-        }
-    }
-
-    /// The sender released the button (voice_end). Start immediately if still buffering,
-    /// otherwise just let the queue drain and fire `onFinished`.
-    func finish() {
-        ended = true
-        if !started { startPlayback() }
-        else if player.currentItem == nil { fireFinished() }
-    }
-
-    /// Tear down without firing onFinished (peer dropped / room closed).
-    func reset() {
-        observer = nil
-        player.pause()
-        player.removeAllItems()
-        cleanupFiles()
-        buffered.removeAll()
-        started = false
-        ended = false
-        releaseSession()
-    }
-
-    private func startPlayback() {
-        guard !started else { return }
-        started = true
-        for item in buffered { player.insert(item, after: player.items().last) }
-        buffered.removeAll()
-
-        // A press too short to produce even one segment ends here: finish now rather than leave
-        // the player half-started, where the next stream's first underrun would fire onFinished.
-        guard !player.items().isEmpty else {
-            fireFinished()
-            return
-        }
-
-        if !sessionHeld {
-            VoiceAudioSession.shared.acquire()
-            sessionHeld = true
-        }
-
-        observer = player.observe(\.currentItem, options: [.new]) { [weak self] p, _ in
-            guard let self else { return }
-            if p.currentItem == nil { self.fireFinished() }
-        }
-        player.play()
-    }
-
-    private func fireFinished() {
-        guard ended, started else { return }
-        observer = nil
-        cleanupFiles()
-        started = false
-        ended = false
-        releaseSession()
-        onFinished?()
-    }
-
-    private func releaseSession() {
-        guard sessionHeld else { return }
-        sessionHeld = false
-        VoiceAudioSession.shared.release()
-    }
-
-    private func cleanupFiles() {
-        for url in tempURLs { try? FileManager.default.removeItem(at: url) }
-        tempURLs.removeAll()
     }
 }
 

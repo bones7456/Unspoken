@@ -158,8 +158,7 @@ extension ChatViewModel: WebSocketDelegate {
                 self.typingContent = ""
                 self.stopPeerHeartRate()
                 self.stopHeartRateMode(notifyPeer: false)
-                self.resetPeerVoiceStream()
-                if self.isTalking { self.stopTalking() }
+                self.abortVoiceCapture()
 
             case "room_closed":
                 self.enterFarewell(.hostClosed)
@@ -193,10 +192,8 @@ extension ChatViewModel: WebSocketDelegate {
                         if let aData = Data(base64Encoded: data) {
                             self.messages.append(Message(content: "", isFromMe: false, isTyping: false, audioData: aData, audioDuration: voiceDurationOf(aData), quote: quote))
                         }
-                    case "voice_stream":
-                        if let sData = Data(base64Encoded: data) { self.receiveVoiceSegment(sData) }
-                    case "voice_end":
-                        self.receiveVoiceEnd(seconds: Int(data) ?? 0)
+                    case "voice_stream", "voice_end":
+                        break   // live walkie-talkie is gone; ignore fragments from an older peer
                     default:
                         self.messages.append(Message(content: data, isFromMe: false, isTyping: false, quote: quote))
                     }
@@ -256,8 +253,8 @@ extension ChatViewModel: WebSocketDelegate {
                         self.typingContent = ""
                         self.stopPeerHeartRate()
                         self.stopHeartRateMode(notifyPeer: false)
-                        self.resetPeerVoiceStream()
-                        if self.isTalking { self.stopTalking() }
+                        // A recording in progress is deliberately left running: this is a pinned
+                        // room, so on release it is queued for the peer's return.
                     }
                 }
 
@@ -279,7 +276,7 @@ extension ChatViewModel: WebSocketDelegate {
                             self.messages.append(Message(content: "", isFromMe: false, isTyping: false, timestamp: timestamp, audioData: aData, audioDuration: voiceDurationOf(aData), quote: quote))
                         }
                     case "voice_stream", "voice_end":
-                        break   // stale live walkie-talkie fragments queued during a disconnect: discard (still acked below)
+                        break   // fragments queued by an older build's walkie-talkie: discard (still acked below)
                     default:
                         self.messages.append(Message(content: data, isFromMe: false, isTyping: false, timestamp: timestamp, quote: quote))
                     }

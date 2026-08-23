@@ -62,6 +62,7 @@ Views, models, and utilities:
 - **`Models.swift`** — `Message` and `QuoteContent` value types.
 - **`VoiceChat.swift`** — voice capture + playback (see "Voice Feature").
 - **`ImagePicker.swift`**, **`MemeSearchView.swift`** — image sources; `ScreenshotProtected.swift` — screenshot blocking; **`WCAdapter.swift`** — `WCSessionDelegate` wrapper feeding Watch BPM to `ChatViewModel`.
+- **`SpeedTest.swift`**, **`SpeedTestView.swift`** — the "Speed Test" connection check on the selection screen (see "Speed Test").
 
 **State flow:** `ChatViewModel` is created as `@StateObject` in `UnspokenApp` and passed via `@EnvironmentObject` to child views. Navigation switches between `RoomSelectionView` and `ContentView` based on `chatViewModel.isChatOpen`.
 
@@ -87,7 +88,7 @@ Protocol-compatible TypeScript port of `unspoken.py`. `unspoken.py` is the spec 
   before the port), and Python's 10-minute purge loop becomes a DO **alarm** armed at the earliest
   `destroy_after`. `UNSPOKEN_UNPIN_GRACE_SECONDS` is read as a Worker var — unset in production
   (7 days); the test suite runs `wrangler dev --var UNSPOKEN_UNPIN_GRACE_SECONDS:3` to exercise expiry.
-- **`test/protocol-test.mjs`** — integration test (23 steps, ~69 assertions) covering the full protocol including pin flow, stop-and-wait pending delivery, chunking, key-mismatch rejection, report/block, and grace-period unpin. Run it against both servers when changing either: `node test/protocol-test.mjs ws://localhost:8787` (wrangler dev) and `ws://localhost:8766` (`uv run unspoken.py --no-ssl --port 8766`).
+- **`test/protocol-test.mjs`** — integration test (25 steps, ~79 assertions) covering the full protocol including pin flow, stop-and-wait pending delivery, chunking, key-mismatch rejection, report/block, grace-period unpin, and the `speedtest` action. Run it against both servers when changing either: `node test/protocol-test.mjs ws://localhost:8787` (wrangler dev) and `ws://localhost:8766` (`uv run unspoken.py --no-ssl --port 8766`).
 - **Deploy**: `npm run deploy`. Custom domain `un.luy.li` (requires the `luy.li` zone on Cloudflare DNS). Client connects with Address=`un.luy.li`, Port=`443`, SSL on — note Cloudflare cannot serve port 8765.
 
 ## Encryption
@@ -104,13 +105,13 @@ JSON-based protocol over WSS. `Unspoken-server/unspoken.py` is the spec — its 
 `handle_connection` dispatch loop is the authoritative list of actions and response fields,
 and `Unspoken-server-cf/test/protocol-test.mjs` pins the observable behaviour of both servers.
 
-**Core actions:** `login`, `create_room`, `join_room`, `send_message`, `typing`, `heart_rate`, `pending_ack`, `report_user`, `leave_room`
+**Core actions:** `login`, `create_room`, `join_room`, `send_message`, `typing`, `heart_rate`, `pending_ack`, `report_user`, `leave_room`, `speedtest`
 
 **Pin actions:** `request_pin`, `accept_pin`, `reject_pin`, `unpin_room`
 
-**Server-only responses:** `room_created`, `room_joined`, `user_joined`, `user_left`, `room_closed`, `new_message`, `ack`, `pin_requested`, `pin_accepted`, `pin_rejected`, `room_unpinned`, `peer_status`, `pending_message` (singular — one per `pending_ack`), `error`, `failed`, `login_failed`, `blocked`
+**Server-only responses:** `room_created`, `room_joined`, `user_joined`, `user_left`, `room_closed`, `new_message`, `ack`, `pin_requested`, `pin_accepted`, `pin_rejected`, `room_unpinned`, `peer_status`, `pending_message` (singular — one per `pending_ack`), `speedtest_result`, `error`, `failed`, `login_failed`, `blocked`
 
-**Encrypted message payload types** (the `type` field inside the AES-GCM plaintext wrapped by `wrapPayload`/`unwrapPayload`, carried by `send_message`/`new_message`/`pending_message`): `text`, `image`, `audio` (voice message), `voice_stream` (live walkie-talkie segment), `voice_end` (walkie-talkie end marker). The server never inspects these — it relays/queues the opaque ciphertext — so voice needed **no server change**. See "Voice Feature".
+**Encrypted message payload types** (the `type` field inside the AES-GCM plaintext wrapped by `wrapPayload`/`unwrapPayload`, carried by `send_message`/`new_message`/`pending_message`): `text`, `image`, `audio` (voice message). The server never inspects these — it relays/queues the opaque ciphertext — so voice needed **no server change**. `voice_stream`/`voice_end` are **retired** (live walkie-talkie, removed); the client only ignores them on receive. See "Voice Feature".
 
 ## Pin Room Feature
 
@@ -273,41 +274,90 @@ Receives `["bpm": X]` from Watch → calls closure → `currentBPM = bpm` on mai
 
 ## Voice Feature
 
-Push-to-talk (hold the mic button in the input bar). Behavior is **adaptive on peer status at press time**:
-- **Peer online → live walkie-talkie.** Captured as ~1s AAC/m4a segments streamed as payload `type: "voice_stream"` via `send_message` **without `seq`** (no ack round-trip, ephemeral). Release sends `type: "voice_end"` (data = seconds spoken). Both sides get a "🎙️ Walkie-talkie m:ss" **system line** — no bubble.
-- **Peer offline + pinned room → one queued voice message.** The whole hold is encoded to a single `type: "audio"` payload sent via `send_message` **with `seq`** (server queues it, delivers on reconnect), rendered as a **playable voice bubble**.
-- **Peer offline + non-pinned → button hidden** (`canUseVoice = peerPublicKey != nil && (peerIsOnline || isPinned)`).
+Push-to-talk (hold the mic button in the input bar) records **one voice message per hold**.
+The whole hold is encoded to a single `type: "audio"` payload and sent via `send_message`
+**with `seq`** — relayed straight through to an online peer, or queued by the server (pinned
+room) and delivered when the peer returns. Either way it renders as a **playable voice bubble**.
 
-**No server change.** Reuses `send_message`/`new_message`/`pending_message` (both Python and CF). The user's explicit tradeoff: `voice_stream`/`voice_end` fragments sent in the race window before a pinned peer's offline signal get queued; the receiver **discards them on reconnect** — the `pending_message` handler treats `voice_stream`/`voice_end` as a no-op (no bubble) but **still sends `pending_ack`** to drain the queue. `audio` in `pending_message` is a real message → delivered as a bubble.
+Live walkie-talkie streaming (`voice_stream`/`voice_end`) was **removed** after it tested badly
+in the field: quality over a real mobile link never justified the complexity. Both servers still
+relay whatever the payload is, so nothing server-side changed then or now; the client simply
+never sends those types any more, and **ignores them on receive** (`new_message` for a peer
+still on an older build, `pending_message` for fragments an older build left in a queue — those
+are still `pending_ack`ed so the stop-and-wait queue can drain).
+
+- **Peer online or pinned room → mic button shown**; the message is delivered live or queued.
+- **Peer offline + non-pinned → button hidden** (`canUseVoice = peerPublicKey != nil && (peerIsOnline || isPinned)`) — the server would drop it with nowhere to queue it.
+- **A peer going offline mid-hold in a pinned room does not abort the recording** — on release it is simply queued (`peer_status: offline` deliberately leaves the capture running).
 
 ### Files
-- **`Unspoken/VoiceChat.swift`** — five classes + two free helpers (`voiceDurationOf`, `formatVoiceDuration`):
-  - `VoiceAudioSession` — process-wide, **reference-counted** owner of the `AVAudioSession`. Capture and playback must never configure the session themselves: a walkie-talkie has both running at once, so a `.playback` switch would drop the mic off the route mid-transmission and a `setActive(false)` on PTT release would cut the peer's playback short. One `.playAndRecord` + `.defaultToSpeaker` + `.allowBluetooth` + `.mixWithOthers` config is installed by the first `acquire()` and only deactivated when the last holder `release()`s. Every voice class holds it while active (`VoiceCapture` releases synchronously in `stop()`, before its async flush, so a quick re-press can't race the release).
+- **`Unspoken/VoiceChat.swift`** — four classes + two free helpers (`voiceDurationOf`, `formatVoiceDuration`):
+  - `VoiceAudioSession` — process-wide, **reference-counted** owner of the `AVAudioSession`. Capture and playback must never configure the session themselves: they overlap (a received voice message can still be playing when the user starts a new hold), so a `.playback` switch would drop the mic off the route mid-recording and a `setActive(false)` on PTT release would cut a playing bubble short. One `.playAndRecord` + `.defaultToSpeaker` + `.allowBluetooth` + `.mixWithOthers` config is installed by the first `acquire()` and only deactivated when the last holder `release()`s. (`VoiceCapture` releases synchronously in `stop()`, before its async flush, so a quick re-press can't race the release.)
   - `PCMRingBuffer` — fixed-capacity (~2s) mono float ring, the hand-off from the mic tap to the encoder queue. The tap thread is real-time, so it only memcpys into preallocated storage under a short `os_unfair_lock` (priority-donating); multi-channel input is downmixed to mono on the way in so both sides stay a straight memcpy. Overflow drops the oldest samples rather than blocking the tap.
-  - `VoiceCapture` — `AVAudioEngine` input tap → `PCMRingBuffer` → AAC/m4a. **No encoding or file I/O ever happens on the tap thread**: a `DispatchSourceTimer` on the private `ioQueue` drains the ring ~10x/s, writes to the `AVAudioFile`, and rotates the segment when ~1s of frames has accumulated. `Mode.stream` emits each self-contained ~1s segment via `onSegment`; `Mode.file` accumulates the whole hold and emits once via `onFileComplete(data, duration)`. Callbacks fire on main. `stop(completion:)` flushes the trailing segment/whole file **before** `completion`, so the caller can send `voice_end` knowing the last segment already went out.
-  - `VoiceStreamPlayer` — receiver jitter buffer: buffers segments, starts playback only after ~2 segments (~2s cushion), then plays back-to-back through an `AVQueuePlayer`; resumes after an underrun; `onFinished` fires when the stream ended (`voice_end`) **and** the queue drained. A press too short to produce any segment (`voice_end` with nothing buffered) finishes immediately instead of leaving the player half-started — otherwise the *next* stream's first underrun would fire `onFinished` mid-stream.
+  - `VoiceCapture` — `AVAudioEngine` input tap → `PCMRingBuffer` → AAC/m4a (32 kbps mono). **No encoding or file I/O ever happens on the tap thread**: a `DispatchSourceTimer` on the private `ioQueue` drains the ring ~10x/s and writes to the `AVAudioFile`. `stop(completion:)` flushes the recording and delivers `onFileComplete(data, duration)` on main **before** `completion`.
   - `VoiceMessagePlayer: ObservableObject` — plays one voice-message bubble at a time; `@Published playingId`/`progress` observed by `MessageView`.
 - **`Unspoken/Info.plist`** — `NSMicrophoneUsageDescription`.
 - **`Models.swift`** — `Message.audioData`/`audioDuration`; `QuoteContent.audio(duration)` (wire `type:"audio"`, data = seconds string).
 - **`MessageView.swift`** — `VoiceBubbleView` (play/pause + duration + progress track scaled by duration); takes the shared `VoiceMessagePlayer`. Quote block + compose-time quote preview show `[Voice]`.
 
 ### Key state (ChatViewModel)
-- `@Published isTalking` — self transmitting (stream or file recording)
-- `@Published peerIsTalking` — receiving a live stream (drives the "Peer is talking…" banner)
+- `@Published isTalking` — self recording (drives the button state and the "Recording — release to send" banner)
 - `@Published voiceError` — mic denied etc., surfaced via the shared `AppAlert` (`.voice` case)
-- `talkRequested` (private) — guards the async mic-permission race: the PTT `DragGesture(minimumDistance: 0)` calls `startTalking()` on `.onChanged` and `stopTalking()` on `.onEnded`; if released before the permission callback returns, the callback tears the capture down instead of going live.
+- `talkRequested` (private) — guards the async mic-permission race: the PTT `DragGesture(minimumDistance: 0)` calls `startTalking()` on `.onChanged` and `stopTalking()` on `.onEnded`; if released before the permission callback returns, the callback tears the capture down instead of recording.
 
 ### Send / receive (ChatViewModel.swift)
-- `startTalking()` picks mode from `peerIsOnline`/`isPinned`, wires `voiceCapture` callbacks, requests mic.
-- `stopTalking()` → `voiceCapture.stop`; stream mode sends `voice_end` + appends the self summary line; file mode appends its bubble from `sendVoiceMessage`.
-- `sendVoiceSegment` / `sendVoiceEnd` (private, guarded on `peerIsOnline`, no `seq`) and `sendVoiceMessage(data:duration:)` (5 MB guard, `seq`, appends own bubble). `retryPendingMessages` has an `audio` branch (resent on reconnect like images).
-- Receiver hooks: `receiveVoiceSegment`, `receiveVoiceEnd`, `resetPeerVoiceStream`.
+- `startTalking()` — guarded on `peerIsOnline || isPinned`, wires `onFileComplete`, requests mic.
+- `stopTalking()` → `voiceCapture.stop`; the bubble is appended by `sendVoiceMessage`, which the flush calls.
+- `sendVoiceMessage(data:duration:)` — 5 MB guard, `seq`, appends own bubble. `retryPendingMessages` has an `audio` branch (resent on reconnect like images).
+- `abortVoiceCapture()` — tear down mid-hold **without** emitting, for when there is no longer anywhere to send it.
 
-### Cleanup triggers (call `resetPeerVoiceStream()` + `stopTalking()` if talking)
-`user_left`, `room_closed`, `room_unpinned`, `peer_status: offline`. `leaveRoom()` uses `abortVoiceCapture()` (suppresses the trailing emission) + `resetPeerVoiceStream()` + `voiceMessagePlayer.stop()`.
+### Cleanup triggers
+`user_left`, `room_closed` / `enterFarewell`, `leaveRoom` → `abortVoiceCapture()` (+ `voiceMessagePlayer.stop()` in `leaveRoom`). `peer_status: offline` deliberately does **not** abort — see above.
 
 ### Cross-client note
-`Unspoken-web` does not yet play `audio`/`voice_stream` (its fallback renders base64 as text) — voice is iOS↔iOS only for now.
+`Unspoken-web` does not yet play `audio` (its fallback renders base64 as text) — voice is iOS↔iOS only for now.
+
+## Speed Test
+
+A "Speed Test" button on `RoomSelectionView` opens `SpeedTestView`, which runs one connection
+check against the server configured in the fields above it and answers a non-technical
+question: *will this connection be good enough to chat on?*
+
+### Protocol: the `speedtest` action (both servers)
+Deliberately stateless — no room, no peer, no persistence, nothing encrypted. The server just
+bounces opaque payloads so the client can time them:
+
+```
+→ {"action":"speedtest", "seq":N, "mode":"echo"|"upload"|"download", "payload":"…", "size":N}
+← {"action":"speedtest_result", "seq":N, "size":<chars received>, "payload":"…"}
+```
+- `echo` returns the payload (a round trip: a text message, a voice segment)
+- `upload` absorbs it and answers with `size` only (sending a photo)
+- `download` ignores `payload` and generates `size` characters (receiving a photo)
+
+Guards, identical in `unspoken.py` and `server.ts`: login required (an unauthenticated
+`speedtest` is silently ignored), 256 KB per message (`error` "Speed test payload too large."),
+and a 16 MB up+down budget per connection (`error` "Speed test quota exceeded."). `payload` is
+in both servers' log-truncation key sets. Payload filler is random on both ends so a
+compressing transport can't fake the numbers.
+
+### Client (`SpeedTest.swift`)
+`SpeedTestRunner` opens **its own** WebSocket (never `ChatViewModel`'s, so a live chat is
+untouched) and runs three steps on a private queue, publishing `phase`/`progress` to the sheet:
+1. **messages** — 6 sequential 96-char echoes; median / best / jitter, first sample dropped as warm-up.
+2. **sendingPhoto** / 3. **receivingPhoto** — 64 KB chunks, 4 in flight, until 3 s or 1 MB per
+   direction. Throughput is timed from the *first* arrival and excludes that chunk, so a fast
+   link isn't scored on its round-trip latency. Whole run costs ~2.1 MB.
+
+There is no voice step: with live walkie-talkie gone, a voice message is just a small upload, so
+the voice line on the result screen is **derived** from `uploadKBps` (`voiceWireKBPerSecond`, 32 kbps
+AAC + base64) and graded against its own length rather than measured separately.
+`SpeedTestReport` holds only raw measurements; every sentence and grade shown is derived from
+them there (`plainFindings`, `headline`, `grade`), so wording and numbers can't drift apart.
+The overall grade is the **worst** of latency / speed (voice is left out — it is derived from the
+same upload speed and is never the binding limit). A first probe that times out is
+reported as "this server is running an older version that has no speed test" — the one case
+where a pre-`speedtest` server is distinguishable from a dead one.
 
 ## Conventions
 

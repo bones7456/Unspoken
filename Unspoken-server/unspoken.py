@@ -11,6 +11,7 @@ import json
 import time
 import uuid
 import ssl
+import base64
 from datetime import datetime
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
@@ -32,6 +33,12 @@ pending_messages = {}  # { room_id: { "for_host": [...], "for_guest": [...] } }
 # messages (and drain its pending queue) before everything is destroyed. Overridable for tests.
 UNPIN_GRACE_SECONDS = int(os.environ.get('UNSPOKEN_UNPIN_GRACE_SECONDS', 7 * 24 * 3600))
 PURGE_INTERVAL_SECONDS = 600
+
+# Speed test ('speedtest' action): the client's Speed Test screen measures latency and
+# throughput by bouncing opaque payloads off the server. It never touches rooms, keys or
+# storage — payloads are echoed, absorbed, or generated and immediately forgotten.
+SPEEDTEST_MAX_PAYLOAD = 256 * 1024          # per message, in characters
+SPEEDTEST_MAX_BYTES_PER_CONN = 16 * 1024 * 1024   # up+down budget for one connection
 
 # 确保存储目录存在
 os.makedirs('data', exist_ok=True)
@@ -171,7 +178,7 @@ async def send_next_pending(websocket, user_id, room_id, role):
     await websocket.send(notification)
     log_message("SENT", user_id, f"Delivered pending msg {msg['pending_msg_id']} ({len(queue) - 1} remaining)")
 
-_TRUNCATE_KEYS = {"encrypted_content", "encrypted_aes_key", "public_key", "peer_public_key", "host_public_key", "guest_public_key"}
+_TRUNCATE_KEYS = {"encrypted_content", "encrypted_aes_key", "public_key", "peer_public_key", "host_public_key", "guest_public_key", "payload"}
 _TRUNCATE_LEN = 16
 
 def _format_log_payload(message):
@@ -206,8 +213,14 @@ async def check_available_user_in_data(data, websocket):
     await websocket.send(response)
     return False
 
+def speedtest_payload(n):
+    """n characters of incompressible filler, so a compressing transport can't fake the result."""
+    raw = base64.b64encode(os.urandom(n * 3 // 4 + 3)).decode('ascii')   # 3 bytes -> 4 chars
+    return raw[:n]
+
 async def handle_connection(websocket):
     user_id = None
+    speedtest_bytes = 0   # per-connection speed-test budget, see SPEEDTEST_MAX_BYTES_PER_CONN
     try:
         async for message in websocket:
             log_message("RECEIVED", user_id or "Unknown", message)
@@ -678,6 +691,40 @@ async def handle_connection(websocket):
                     await handle_report_user(websocket, data)
                 else:
                     log_message("SYSTEM", "Server", f"User {user_id} attempted to report {reported_id} but they are not in the same room")
+
+            elif action == 'speedtest':
+                # Latency / throughput probe for the client's Speed Test screen. Deliberately
+                # stateless: no room, no peer, nothing persisted. Three modes mirror what a
+                # chat actually does — 'echo' round-trips a message (text, voice segment),
+                # 'upload' absorbs one (sending a photo), 'download' generates one (receiving).
+                if not user_id:
+                    continue  # must log in first
+                seq = data.get('seq')
+                mode = data.get('mode', 'echo')
+                payload = data.get('payload') or ''
+                want = max(0, int(data.get('size') or 0))
+                up_bytes = len(payload)
+                down_bytes = up_bytes if mode == 'echo' else (want if mode == 'download' else 0)
+                if up_bytes > SPEEDTEST_MAX_PAYLOAD or want > SPEEDTEST_MAX_PAYLOAD:
+                    response = json.dumps({'action': 'error', 'message': 'Speed test payload too large.'})
+                    await websocket.send(response)
+                    log_message("SENT", user_id, response)
+                    continue
+                speedtest_bytes += up_bytes + down_bytes
+                if speedtest_bytes > SPEEDTEST_MAX_BYTES_PER_CONN:
+                    response = json.dumps({'action': 'error', 'message': 'Speed test quota exceeded.'})
+                    await websocket.send(response)
+                    log_message("SENT", user_id, response)
+                    continue
+                result = {'action': 'speedtest_result', 'seq': seq, 'size': up_bytes}
+                if mode == 'echo':
+                    result['payload'] = payload
+                elif mode == 'download':
+                    result['payload'] = speedtest_payload(down_bytes)
+                response = json.dumps(result)
+                await websocket.send(response)
+                log_message("SENT", user_id, response)
+
     except websockets.exceptions.ConnectionClosedError:
         log_message("SYSTEM", "Server", f"Connection closed for user {user_id}")
     except websockets.exceptions.ConnectionClosedOK:
