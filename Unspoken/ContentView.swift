@@ -5,11 +5,16 @@
 
 import SwiftUI
 
-// MARK: - IdentifiableImage
+// MARK: - ImageGallery
 
-private struct IdentifiableImage: Identifiable {
+// Every image in the conversation plus which one was tapped, so the full-screen viewer can
+// page between them. A snapshot taken at tap time, deliberately not a live view of
+// `viewModel.messages`: an image arriving mid-browse would grow the array and shift the index
+// out from under the user's finger.
+private struct ImageGallery: Identifiable {
     let id = UUID()
-    let image: UIImage
+    let images: [Data]      // oldest first, matching the message order
+    let startIndex: Int
 }
 
 // Batch of images awaiting send confirmation, in the order the user picked them.
@@ -27,15 +32,205 @@ private enum ActiveSheet: Identifiable {
     case imagePicker
     case memeSearch
     case confirmImage(IdentifiableImages)
-    case fullScreenImage(IdentifiableImage)
+    case fullScreenImage(ImageGallery)
 
     var id: String {
         switch self {
         case .imagePicker:              return "imagePicker"
         case .memeSearch:               return "memeSearch"
         case .confirmImage(let i):      return "confirm-\(i.id)"
-        case .fullScreenImage(let i):   return "full-\(i.id)"
+        case .fullScreenImage(let g):   return "full-\(g.id)"
         }
+    }
+}
+
+// MARK: - ImageGalleryView
+// Full-screen image viewer: swipe between every image in the conversation, pinch or
+// double-tap to zoom. Stays inside ScreenshotProtected — the whole point of the app.
+
+private struct ImageGalleryView: View {
+    let gallery: ImageGallery
+    let onClose: () -> Void
+
+    @State private var index: Int
+    // Tracks only the page on screen, so a zoomed-then-swiped-away page can't leave this stuck.
+    @State private var isZoomed: Bool = false
+
+    init(gallery: ImageGallery, onClose: @escaping () -> Void) {
+        self.gallery = gallery
+        self.onClose = onClose
+        _index = State(initialValue: gallery.startIndex)
+    }
+
+    var body: some View {
+        ScreenshotProtected {
+            ZStack(alignment: .top) {
+                Color.black.ignoresSafeArea()
+
+                TabView(selection: $index) {
+                    ForEach(gallery.images.indices, id: \.self) { i in
+                        Group {
+                            if let image = UIImage(data: gallery.images[i]) {
+                                ZoomableImageView(image: image, isCurrent: i == index) { zoomed in
+                                    if i == index { isZoomed = zoomed }
+                                }
+                            } else {
+                                Image(systemName: "photo")
+                                    .font(.largeTitle).foregroundColor(.white.opacity(0.35))
+                            }
+                        }
+                        .tag(i)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .ignoresSafeArea()
+                .onChange(of: index) { _ in isZoomed = false }
+
+                topBar
+            }
+        }
+        .ignoresSafeArea()
+        // A zoomed image is panned vertically; without this the sheet's drag-to-dismiss
+        // would swallow that gesture and close the viewer instead.
+        .interactiveDismissDisabled(isZoomed)
+    }
+
+    private var topBar: some View {
+        HStack {
+            // Only meaningful with something to page to — and it is the only hint that
+            // paging exists at all.
+            if gallery.images.count > 1 {
+                Text("\(index + 1) / \(gallery.images.count)")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Color.black.opacity(0.45)).clipShape(Capsule())
+            }
+            Spacer()
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Color.black.opacity(0.45)).clipShape(Circle())
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+    }
+}
+
+// MARK: - ZoomableImageView
+
+// One page of the gallery. Zooming is a `UIScrollView` rather than SwiftUI's
+// MagnificationGesture + DragGesture, because a SwiftUI drag would have to out-prioritise the
+// page view controller's own pan on every single swipe. Nested scroll views already settle
+// that in UIKit: the inner one pans the zoomed image, and once it is back at its edge the
+// next swipe pages as usual.
+private struct ZoomableImageView: UIViewRepresentable {
+    let image: UIImage
+    /// Pages swiped away from are reset, so coming back to one starts unzoomed.
+    let isCurrent: Bool
+    let onZoomChange: (Bool) -> Void
+
+    func makeUIView(context: Context) -> ZoomScrollView {
+        let scroll = ZoomScrollView()
+        scroll.delegate = context.coordinator
+        scroll.minimumZoomScale = 1
+        scroll.maximumZoomScale = 4
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.showsVerticalScrollIndicator = false
+        scroll.backgroundColor = .clear
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.onLayout = { [weak coordinator = context.coordinator] in coordinator?.layoutImage() }
+
+        let imageView = UIImageView(image: image)
+        imageView.contentMode = .scaleAspectFit
+        imageView.isUserInteractionEnabled = true
+        scroll.addSubview(imageView)
+
+        context.coordinator.scrollView = scroll
+        context.coordinator.imageView = imageView
+
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator,
+                                               action: #selector(Coordinator.toggleZoom(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        scroll.addGestureRecognizer(doubleTap)
+        return scroll
+    }
+
+    func updateUIView(_ scroll: ZoomScrollView, context: Context) {
+        context.coordinator.onZoomChange = onZoomChange
+        if !isCurrent && scroll.zoomScale != scroll.minimumZoomScale {
+            scroll.setZoomScale(scroll.minimumZoomScale, animated: false)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(onZoomChange: onZoomChange) }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        weak var scrollView: ZoomScrollView?
+        weak var imageView: UIImageView?
+        var onZoomChange: (Bool) -> Void
+
+        init(onZoomChange: @escaping (Bool) -> Void) { self.onZoomChange = onZoomChange }
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            centerContent()
+            onZoomChange(scrollView.zoomScale > scrollView.minimumZoomScale)
+        }
+
+        /// Sizes the image view to the aspect-fit rect instead of the full bounds, so zooming
+        /// magnifies the picture rather than the letterbox bars around it.
+        func layoutImage() {
+            guard let scroll = scrollView, let imageView, let image = imageView.image,
+                  scroll.bounds.width > 0, scroll.bounds.height > 0,
+                  image.size.width > 0, image.size.height > 0 else { return }
+            if scroll.zoomScale == scroll.minimumZoomScale {
+                let fit = min(scroll.bounds.width / image.size.width,
+                              scroll.bounds.height / image.size.height)
+                let size = CGSize(width: image.size.width * fit, height: image.size.height * fit)
+                imageView.frame = CGRect(origin: .zero, size: size)
+                scroll.contentSize = size
+            }
+            centerContent()
+        }
+
+        /// Keeps the image centred while it is smaller than the viewport.
+        private func centerContent() {
+            guard let scroll = scrollView else { return }
+            let x = max(0, (scroll.bounds.width - scroll.contentSize.width) / 2)
+            let y = max(0, (scroll.bounds.height - scroll.contentSize.height) / 2)
+            scroll.contentInset = UIEdgeInsets(top: y, left: x, bottom: y, right: x)
+        }
+
+        @objc func toggleZoom(_ gesture: UITapGestureRecognizer) {
+            guard let scroll = scrollView, let imageView else { return }
+            if scroll.zoomScale > scroll.minimumZoomScale {
+                scroll.setZoomScale(scroll.minimumZoomScale, animated: true)
+            } else {
+                // Zoom in on the tapped point rather than the centre.
+                let target: CGFloat = 2.5
+                let point = gesture.location(in: imageView)
+                let size = CGSize(width: scroll.bounds.width / target,
+                                  height: scroll.bounds.height / target)
+                scroll.zoom(to: CGRect(x: point.x - size.width / 2, y: point.y - size.height / 2,
+                                       width: size.width, height: size.height), animated: true)
+            }
+        }
+    }
+}
+
+// UIScrollView only knows its real size after layout, and SwiftUI gives no hook for that —
+// updateUIView can run before the frame is set. This reports it instead.
+private final class ZoomScrollView: UIScrollView {
+    var onLayout: (() -> Void)?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout?()
     }
 }
 
@@ -132,6 +327,22 @@ extension UIResponder {
     }
 }
 
+// MARK: - Input bar hit area
+
+private extension View {
+    /// Grows a control's touch target into the input bar's own padding *without* changing its
+    /// layout size, so the bar keeps its height while the corners of the slot stay tappable.
+    /// The positive padding widens the frame, `contentShape` claims it for hit testing, and the
+    /// matching negative padding shrinks the reported layout size back to the original.
+    func inputBarHitArea() -> some View {
+        let insets = EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 3)
+        return padding(insets)
+            .contentShape(Rectangle())
+            .padding(EdgeInsets(top: -insets.top, leading: -insets.leading,
+                                bottom: -insets.bottom, trailing: -insets.trailing))
+    }
+}
+
 // MARK: - ContentView
 
 struct ContentView: View {
@@ -142,8 +353,15 @@ struct ContentView: View {
     @State private var bgHeartScale: CGFloat = 1.0
     @State private var showTimestamps: Bool = false
     @FocusState private var isTextFieldFocused: Bool
-    @State private var showImageSourceDialog: Bool = false
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
+    // Voice input is a mode, not a button: the attachment menu swaps the whole input bar for
+    // one full-width hold-to-talk target, so the push-to-talk gesture can't be mistouched.
+    @State private var voiceMode: Bool = false
+    // Mirrors UIPasteboard.general.hasImages. A `Menu`'s content is not guaranteed to be
+    // rebuilt at present-time, so the flag is refreshed by notification instead of read inline.
+    // (`hasImages` alone never triggers the system "Allow Paste" alert — only reading `.image`
+    // does, which is what beginSystemPasteboardAccess still guards.)
+    @State private var hasClipboardImage: Bool = false
     // The single sheet currently presented (picker / meme / confirm / fullscreen).
     @State private var activeSheet: ActiveSheet? = nil
     // Images awaiting the source sheet (picker / meme) to dismiss before the confirm sheet shows.
@@ -228,28 +446,6 @@ struct ContentView: View {
         .onChange(of: viewModel.voiceError) { newValue in
             if let msg = newValue, activeAlert == nil { activeAlert = .voice(msg) }
         }
-        .confirmationDialog("Send Image", isPresented: $showImageSourceDialog) {
-            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                Button("Take Photo") { imagePickerSource = .camera; activeSheet = .imagePicker }
-            }
-            Button("Choose from Library") { imagePickerSource = .photoLibrary; activeSheet = .imagePicker }
-            Button("Send Meme") { activeSheet = .memeSearch }
-            if UIPasteboard.general.hasImages {
-                Button("Send Clipboard Image") {
-                    // Reading the clipboard image triggers the system "Allow Paste" alert on
-                    // iOS 16+, which briefly resigns active. Tell the view model to skip the
-                    // pinned-room privacy auto-lock for that transient interruption, otherwise
-                    // the chat (and this confirm sheet) gets torn down. See ChatViewModel.
-                    viewModel.beginSystemPasteboardAccess()
-                    if let img = UIPasteboard.general.image {
-                        activeSheet = .confirmImage(IdentifiableImages(images: [img]))
-                    } else {
-                        viewModel.endSystemPasteboardAccess()
-                    }
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
         // Single sheet modifier for every presentation. When a source sheet (picker / meme)
         // dismisses with a staged image, onDismiss chains straight into the confirm sheet.
         .sheet(item: $activeSheet, onDismiss: {
@@ -298,14 +494,8 @@ struct ContentView: View {
                         }
                     }
                 )
-            case .fullScreenImage(let item):
-                ScreenshotProtected {
-                    ZStack {
-                        Color.black.ignoresSafeArea()
-                        Image(uiImage: item.image).resizable().scaledToFit()
-                    }
-                }
-                .ignoresSafeArea()
+            case .fullScreenImage(let gallery):
+                ImageGalleryView(gallery: gallery) { activeSheet = nil }
             }
         }
     }
@@ -413,6 +603,16 @@ struct ContentView: View {
         .background(Color.black.opacity(0.2))
     }
 
+    /// Opens the full-screen viewer on `message`, with every other image in the conversation
+    /// loaded alongside it so the user can page between them.
+    private func openGallery(from message: Message) {
+        let shots = viewModel.messages.filter { $0.imageData != nil }
+        guard let start = shots.firstIndex(where: { $0.id == message.id }) else { return }
+        activeSheet = .fullScreenImage(
+            ImageGallery(images: shots.compactMap(\.imageData), startIndex: start)
+        )
+    }
+
     // MARK: - Chat Messages
 
     var chatMessages: some View {
@@ -434,8 +634,8 @@ struct ContentView: View {
                         ForEach(viewModel.messages) { message in
                             MessageView(message: message, voicePlayer: viewModel.voiceMessagePlayer, onReport: {
                                 viewModel.reportUser()
-                            }, showReport: !viewModel.isPinned, showTimestamp: showTimestamps, onImageTap: { image in
-                                activeSheet = .fullScreenImage(IdentifiableImage(image: image))
+                            }, showReport: !viewModel.isPinned, showTimestamp: showTimestamps, onImageTap: {
+                                openGallery(from: message)
                             }, onQuote: {
                                 quotedMessage = message
                                 isTextFieldFocused = true
@@ -488,6 +688,13 @@ struct ContentView: View {
             UIMenuController.shared.menuItems = [
                 UIMenuItem(title: "New Line", action: #selector(UIResponder.unspokenInsertNewLine(_:)))
             ]
+            hasClipboardImage = UIPasteboard.general.hasImages
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+            hasClipboardImage = UIPasteboard.general.hasImages
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            hasClipboardImage = UIPasteboard.general.hasImages
         }
         .onDisappear {
             UIMenuController.shared.menuItems = nil
@@ -532,90 +739,156 @@ struct ContentView: View {
                 .background(Color.white.opacity(0.08))
             }
 
-            // Recording indicator while the push-to-talk button is held.
-            if viewModel.isTalking {
-                HStack(spacing: 6) {
-                    Circle().fill(Color.red).frame(width: 8, height: 8)
-                    Text("Recording — release to send")
-                    Spacer()
-                }
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.85))
-                .padding(.horizontal, 15).padding(.vertical, 4)
-            }
-
             HStack(spacing: 6) {
-                Button(action: { showImageSourceDialog = true }) {
-                    Image(systemName: "photo").foregroundColor(.white)
-                        .frame(width: 36, height: 36)
-                        .background(Color.white.opacity(0.2)).clipShape(Circle())
-                }
-                .disabled(!canSendMessage)
-
-                // Push-to-talk: hold to record a voice message, release to send.
-                if canUseVoice {
-                    Image(systemName: viewModel.isTalking ? "waveform" : "mic.fill")
-                        .foregroundColor(viewModel.isTalking ? .red : .white)
-                        .frame(width: 36, height: 36)
-                        .background(viewModel.isTalking ? Color.red.opacity(0.25) : Color.white.opacity(0.2))
-                        .clipShape(Circle())
-                        .scaleEffect(viewModel.isTalking ? 1.15 : 1.0)
-                        .animation(.easeInOut(duration: 0.15), value: viewModel.isTalking)
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { _ in viewModel.startTalking() }
-                                .onEnded { _ in viewModel.stopTalking() }
-                        )
-                }
-
-                Group {
-                    if #available(iOS 16, *) {
-                        TextField(inputPlaceholder, text: $messageText, axis: .vertical)
-                            .lineLimit(1...2)
-                    } else {
-                        TextField(inputPlaceholder, text: $messageText)
+                if voiceMode {
+                    // Leave voice mode. Recording several messages in a row is the common
+                    // case, so sending one keeps the hold bar up; only this exits.
+                    Button(action: { voiceMode = false }) {
+                        Image(systemName: "xmark").foregroundColor(.white)
+                            .frame(width: 36, height: 36)
+                            .background(Color.white.opacity(0.2)).clipShape(Circle())
+                            .inputBarHitArea()
                     }
-                }
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(Color.white.opacity(0.2)).cornerRadius(18)
-                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.3), lineWidth: 1))
-                .focused($isTextFieldFocused)
-                .onChange(of: messageText) { newValue in
-                    if newValue.hasSuffix("\n") {
-                        if insertingNewLine {
-                            // \n came from the "New Line" toolbar button — keep it
-                            insertingNewLine = false
+                    .disabled(viewModel.isTalking)
+
+                    holdToTalkBar
+                } else {
+                    attachmentMenu
+
+                    Group {
+                        if #available(iOS 16, *) {
+                            TextField(inputPlaceholder, text: $messageText, axis: .vertical)
+                                .lineLimit(1...2)
                         } else {
-                            // \n came from the Return key — strip and send
-                            messageText = String(newValue.dropLast())
-                            if canSendMessage { sendMessage() }
-                            return
+                            TextField(inputPlaceholder, text: $messageText)
                         }
                     }
-                    guard canSendMessage else { return }
-                    typingDebounceTimer?.invalidate()
-                    typingDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { _ in
-                        viewModel.sendTyping(content: newValue)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Color.white.opacity(0.2)).cornerRadius(18)
+                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.3), lineWidth: 1))
+                    .focused($isTextFieldFocused)
+                    .onChange(of: messageText) { newValue in
+                        if newValue.hasSuffix("\n") {
+                            if insertingNewLine {
+                                // \n came from the "New Line" toolbar button — keep it
+                                insertingNewLine = false
+                            } else {
+                                // \n came from the Return key — strip and send
+                                messageText = String(newValue.dropLast())
+                                if canSendMessage { sendMessage() }
+                                return
+                            }
+                        }
+                        guard canSendMessage else { return }
+                        typingDebounceTimer?.invalidate()
+                        typingDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { _ in
+                            viewModel.sendTyping(content: newValue)
+                        }
                     }
-                }
-                .onSubmit { if canSendMessage { sendMessage() } }
-                .disabled(!canSendMessage)
-                .onReceive(NotificationCenter.default.publisher(for: .insertNewLine)) { _ in
-                    guard canSendMessage else { return }
-                    insertingNewLine = true
-                    messageText += "\n"
-                }
+                    .onSubmit { if canSendMessage { sendMessage() } }
+                    .disabled(!canSendMessage)
+                    .onReceive(NotificationCenter.default.publisher(for: .insertNewLine)) { _ in
+                        guard canSendMessage else { return }
+                        insertingNewLine = true
+                        messageText += "\n"
+                    }
 
-                Button(action: sendMessage) {
-                    Image(systemName: "paperplane.fill").foregroundColor(.white)
-                        .frame(width: 36, height: 36)
-                        .background(Color.blue).clipShape(Circle())
+                    Button(action: sendMessage) {
+                        Image(systemName: "paperplane.fill").foregroundColor(.white)
+                            .frame(width: 36, height: 36)
+                            .background(Color.blue).clipShape(Circle())
+                    }
+                    .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !canSendMessage)
                 }
-                .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !canSendMessage)
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
+            .animation(.easeInOut(duration: 0.2), value: voiceMode)
         }
         .background(Color.black.opacity(0.1))
+        // A voice message needs somewhere to land; if that goes away mid-mode, fall back to text.
+        .onChange(of: canUseVoice) { usable in
+            if !usable { voiceMode = false }
+        }
+    }
+
+    /// The single "+" entry for everything that isn't typed text. A `Menu` (not a
+    /// confirmationDialog) so the popover is anchored to the button instead of the screen
+    /// bottom — on iOS 15 `.popover` still degrades to a sheet on iPhone, so this is the only
+    /// native way to get that anchoring.
+    var attachmentMenu: some View {
+        // Declared bottom-up on purpose. UIKit orders menu items by distance from the anchor,
+        // so a menu opening upwards — which this one always does, sitting on the input bar —
+        // renders the first declared item nearest the button and the rest above it. Reading the
+        // list below in reverse gives what the user actually sees:
+        //   Take Photo / Photo Library / Send Meme / Paste Image / —— / Voice Message
+        // with Voice Message closest to the finger.
+        Menu {
+            if canUseVoice {
+                Button(action: { isTextFieldFocused = false; voiceMode = true }) {
+                    Label("Voice Message", systemImage: "mic.fill")
+                }
+                Divider()
+            }
+            if hasClipboardImage {
+                Button(action: {
+                    // Reading the clipboard image triggers the system "Allow Paste" alert on
+                    // iOS 16+, which briefly resigns active. Tell the view model to skip the
+                    // pinned-room privacy auto-lock for that transient interruption, otherwise
+                    // the chat (and this confirm sheet) gets torn down. See ChatViewModel.
+                    viewModel.beginSystemPasteboardAccess()
+                    if let img = UIPasteboard.general.image {
+                        activeSheet = .confirmImage(IdentifiableImages(images: [img]))
+                    } else {
+                        viewModel.endSystemPasteboardAccess()
+                    }
+                }) {
+                    Label("Paste Image", systemImage: "doc.on.clipboard")
+                }
+            }
+            Button(action: { activeSheet = .memeSearch }) {
+                Label("Send Meme", systemImage: "face.smiling")
+            }
+            Button(action: { imagePickerSource = .photoLibrary; activeSheet = .imagePicker }) {
+                Label("Photo Library", systemImage: "photo.on.rectangle")
+            }
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button(action: { imagePickerSource = .camera; activeSheet = .imagePicker }) {
+                    Label("Take Photo", systemImage: "camera.fill")
+                }
+            }
+        } label: {
+            Image(systemName: "plus").foregroundColor(.white)
+                .frame(width: 36, height: 36)
+                .background(Color.white.opacity(0.2)).clipShape(Circle())
+                .inputBarHitArea()
+        }
+        .disabled(!canSendMessage)
+    }
+
+    /// Push-to-talk: hold to record a voice message, release to send. Full width so the
+    /// gesture has a target that can't be hit by accident.
+    var holdToTalkBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: viewModel.isTalking ? "waveform" : "mic.fill")
+            Text(viewModel.isTalking ? "Release to send" : "Hold to Talk")
+                .fontWeight(.semibold)
+            if viewModel.isTalking {
+                Circle().fill(Color.red).frame(width: 8, height: 8)
+            }
+        }
+        .foregroundColor(viewModel.isTalking ? .red : .white)
+        .frame(maxWidth: .infinity)
+        .frame(height: 36)
+        .background(viewModel.isTalking ? Color.red.opacity(0.25) : Color.white.opacity(0.2))
+        .cornerRadius(18)
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.3), lineWidth: 1))
+        .animation(.easeInOut(duration: 0.15), value: viewModel.isTalking)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in viewModel.startTalking() }
+                .onEnded { _ in viewModel.stopTalking() }
+        )
     }
 
     // MARK: - Farewell Bar

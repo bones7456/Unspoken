@@ -57,8 +57,8 @@ See "Cloudflare Server" section below for architecture.
 
 Views, models, and utilities:
 - **`UnspokenApp.swift`** — `@main`, `RoomSelectionView`, URL-scheme routing (`unspoken://host:port/room_id`), pinned-room rejoin UI.
-- **`ContentView.swift`** — chat screen: header, message list, input area (text/image/voice), all alerts via one `AppAlert` enum.
-- **`MessageView.swift`** — message bubble rendering (text / image / `VoiceBubbleView`) + quote block.
+- **`ContentView.swift`** — chat screen: header, message list, input area (text/image/voice), all alerts via one `AppAlert` enum. Also hosts `ImageGalleryView`, the full-screen image viewer (see below).
+- **`MessageView.swift`** — message bubble rendering (text / image / `VoiceBubbleView`) + quote block. `onImageTap` carries no payload: the tapped image is resolved by message identity in `ContentView.openGallery(from:)`, which needs the whole conversation's images, not just this one.
 - **`Models.swift`** — `Message` and `QuoteContent` value types.
 - **`VoiceChat.swift`** — voice capture + playback (see "Voice Feature").
 - **`ImagePicker.swift`**, **`MemeSearchView.swift`** — image sources; `ScreenshotProtected.swift` — screenshot blocking; **`WCAdapter.swift`** — `WCSessionDelegate` wrapper feeding Watch BPM to `ChatViewModel`.
@@ -112,6 +112,28 @@ and `Unspoken-server-cf/test/protocol-test.mjs` pins the observable behaviour of
 **Server-only responses:** `room_created`, `room_joined`, `user_joined`, `user_left`, `room_closed`, `new_message`, `ack`, `pin_requested`, `pin_accepted`, `pin_rejected`, `room_unpinned`, `peer_status`, `pending_message` (singular — one per `pending_ack`), `speedtest_result`, `error`, `failed`, `login_failed`, `blocked`
 
 **Encrypted message payload types** (the `type` field inside the AES-GCM plaintext wrapped by `wrapPayload`/`unwrapPayload`, carried by `send_message`/`new_message`/`pending_message`): `text`, `image`, `audio` (voice message). The server never inspects these — it relays/queues the opaque ciphertext — so voice needed **no server change**. `voice_stream`/`voice_end` are **retired** (live walkie-talkie, removed); the client only ignores them on receive. See "Voice Feature".
+
+## Full-screen images
+
+Tapping an image bubble opens `ImageGalleryView` (in `ContentView.swift`) as the
+`.fullScreenImage` sheet. `openGallery(from:)` builds an `ImageGallery` — **every** image in the
+conversation as `[Data]` (oldest first, already retained by `viewModel.messages`, so COW makes it
+free) plus the tapped index. It is a **snapshot on purpose**: binding it live to `messages` would
+let an image arriving mid-browse shift the index under the user's finger.
+
+- **Paging**: `TabView` + `.tabViewStyle(.page(indexDisplayMode: .never))`. A `n / total` capsule
+  and an `×` sit in a top bar; the counter is the only hint that paging exists, and hides when
+  there is one image.
+- **Zoom**: each page is `ZoomableImageView`, a `UIScrollView` (pinch + double-tap-to-point,
+  1×–4×) rather than SwiftUI gestures — a SwiftUI drag would have to out-prioritise the page view
+  controller's pan on *every* swipe, whereas nested scroll views negotiate that in UIKit already.
+  The image view is sized to the aspect-fit rect, not the full bounds, so zooming magnifies the
+  picture instead of the letterbox bars. `ZoomScrollView` exists only to report `layoutSubviews`,
+  since `updateUIView` can run before the frame is known.
+- A page swiped away from is reset to 1× (`isCurrent`), and `.interactiveDismissDisabled(isZoomed)`
+  stops the sheet's drag-to-dismiss from swallowing the vertical pan of a zoomed image.
+- The viewer stays inside `ScreenshotProtected`. Gestures work through that secure layer — the
+  whole message list already lives in one.
 
 ## Pin Room Feature
 
@@ -274,7 +296,7 @@ Receives `["bpm": X]` from Watch → calls closure → `currentBPM = bpm` on mai
 
 ## Voice Feature
 
-Push-to-talk (hold the mic button in the input bar) records **one voice message per hold**.
+Push-to-talk (hold the full-width bar in voice mode) records **one voice message per hold**.
 The whole hold is encoded to a single `type: "audio"` payload and sent via `send_message`
 **with `seq`** — relayed straight through to an online peer, or queued by the server (pinned
 room) and delivered when the peer returns. Either way it renders as a **playable voice bubble**.
@@ -286,8 +308,8 @@ never sends those types any more, and **ignores them on receive** (`new_message`
 still on an older build, `pending_message` for fragments an older build left in a queue — those
 are still `pending_ack`ed so the stop-and-wait queue can drain).
 
-- **Peer online or pinned room → mic button shown**; the message is delivered live or queued.
-- **Peer offline + non-pinned → button hidden** (`canUseVoice = peerPublicKey != nil && (peerIsOnline || isPinned)`) — the server would drop it with nowhere to queue it.
+- **Peer online or pinned room → the menu offers "Voice Message"**; the message is delivered live or queued.
+- **Peer offline + non-pinned → the item is hidden** (`canUseVoice = peerPublicKey != nil && (peerIsOnline || isPinned)`) — the server would drop it with nowhere to queue it. If that happens while voice mode is open, `ContentView` drops back to text input.
 - **A peer going offline mid-hold in a pinned room does not abort the recording** — on release it is simply queued (`peer_status: offline` deliberately leaves the capture running).
 
 ### Files
@@ -297,11 +319,23 @@ are still `pending_ack`ed so the stop-and-wait queue can drain).
   - `VoiceCapture` — `AVAudioEngine` input tap → `PCMRingBuffer` → AAC/m4a (32 kbps mono). **No encoding or file I/O ever happens on the tap thread**: a `DispatchSourceTimer` on the private `ioQueue` drains the ring ~10x/s and writes to the `AVAudioFile`. `stop(completion:)` flushes the recording and delivers `onFileComplete(data, duration)` on main **before** `completion`.
   - `VoiceMessagePlayer: ObservableObject` — plays one voice-message bubble at a time; `@Published playingId`/`progress` observed by `MessageView`.
 - **`Unspoken/Info.plist`** — `NSMicrophoneUsageDescription`.
+- **`ContentView.swift`** — the input bar's left slot is a single `+` (`attachmentMenu`): a SwiftUI
+  `Menu`, not a `confirmationDialog`, so the popover is anchored to the button rather than the
+  screen bottom (on iOS 15 `.popover` still degrades to a sheet on iPhone). It reads Take Photo /
+  Photo Library / Send Meme / Paste Image, then — below a `Divider` — Voice Message, nearest the
+  finger. **The items are declared in reverse of that**: UIKit orders a menu by distance from the
+  anchor, so an upward-opening menu renders the first declared item at the bottom. Picking Voice
+  Message sets `voiceMode`, which swaps the
+  text field + send button for `holdToTalkBar`, a full-width PTT target that can't be mistouched;
+  an `×` is the only way back, so several voice messages can be recorded in a row. `+` and `×`
+  keep their 36pt circles but take `.inputBarHitArea()`, which claims the bar's own padding for
+  hit testing via positive padding → `contentShape` → matching negative padding, so the touch
+  target grows without the bar getting taller.
 - **`Models.swift`** — `Message.audioData`/`audioDuration`; `QuoteContent.audio(duration)` (wire `type:"audio"`, data = seconds string).
 - **`MessageView.swift`** — `VoiceBubbleView` (play/pause + duration + progress track scaled by duration); takes the shared `VoiceMessagePlayer`. Quote block + compose-time quote preview show `[Voice]`.
 
 ### Key state (ChatViewModel)
-- `@Published isTalking` — self recording (drives the button state and the "Recording — release to send" banner)
+- `@Published isTalking` — self recording (drives the hold bar's "Hold to Talk" / "Release to send" state)
 - `@Published voiceError` — mic denied etc., surfaced via the shared `AppAlert` (`.voice` case)
 - `talkRequested` (private) — guards the async mic-permission race: the PTT `DragGesture(minimumDistance: 0)` calls `startTalking()` on `.onChanged` and `stopTalking()` on `.onEnded`; if released before the permission callback returns, the callback tears the capture down instead of recording.
 

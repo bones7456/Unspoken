@@ -11,7 +11,9 @@ struct MessageView: View {
     let onReport: () -> Void
     var showReport: Bool = true
     var showTimestamp: Bool = false
-    var onImageTap: (UIImage) -> Void = { _ in }
+    // The tapped image is looked up by message identity on the ContentView side (it needs the
+    // whole conversation's images to page through), so nothing is handed back here.
+    var onImageTap: () -> Void = {}
     var onQuote: () -> Void = {}
 
     private static let timeOnlyFormatter: DateFormatter = {
@@ -190,7 +192,7 @@ struct MessageView: View {
                             .scaledToFit()
                             .frame(maxWidth: 200)
                             .cornerRadius(6)
-                            .onTapGesture { onImageTap(uiImage) }
+                            .onTapGesture { onImageTap() }
                             .padding(6)
                     } else {
                         Text(message.content)
@@ -218,7 +220,7 @@ struct MessageView: View {
                     .frame(maxWidth: 220)
                     .cornerRadius(10)
                     .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
-                    .onTapGesture { onImageTap(uiImage) }
+                    .onTapGesture { onImageTap() }
             )
         } else {
             withMessageInteraction(
