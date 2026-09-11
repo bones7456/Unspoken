@@ -49,6 +49,11 @@ class ChatViewModel: ObservableObject {
     @Published var heartRateModeError: String?
     @Published var isTalking: Bool = false        // self is recording a voice message
     @Published var voiceError: String?            // mic denied etc., surfaced as an alert
+    /// Language used to transcribe voice messages (iOS 26+). nil until first resolved — the
+    /// engine's locale list is async, so it can't be settled in init. See ChatViewModel+Transcript.
+    @Published var transcriptLocale: Locale?
+    /// Populated the first time the language picker is opened.
+    @Published var availableTranscriptLocales: [Locale] = []
     @Published var peerLubTick: Int = 0
     @Published var peerDubTick: Int = 0
     @Published var isReconnecting: Bool = false
@@ -73,6 +78,7 @@ class ChatViewModel: ObservableObject {
     var healthStore: HKHealthStore?
     var heartRateTimer: Timer?
     var hapticLoopActive = false
+    var transcriptTasks: [UUID: Task<Void, Never>] = [:]
     var hkObserverQuery: HKObserverQuery?
     let userId: String = {
         let key = "stableUserId"
@@ -390,6 +396,7 @@ class ChatViewModel: ObservableObject {
         stopPeerHeartRate()
         abortVoiceCapture()
         voiceMessagePlayer.stop()
+        cancelAllTranscriptions()
         sendJSON(["action": "leave_room", "room_id": roomId, "role": role, "user_id": userId])
 
         // Clear all room state BEFORE flipping isChatOpen, so the parent view

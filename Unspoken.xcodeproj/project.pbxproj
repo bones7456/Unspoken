@@ -27,6 +27,8 @@
 		A11CE00100000000000000F2 /* VoiceChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE00100000000000000F1 /* VoiceChat.swift */; };
 		A11CE00200000000000000F2 /* SpeedTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE00200000000000000F1 /* SpeedTest.swift */; };
 		A11CE00300000000000000F2 /* SpeedTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE00300000000000000F1 /* SpeedTestView.swift */; };
+		A11CE00400000000000000F2 /* VoiceTranscription.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE00400000000000000F1 /* VoiceTranscription.swift */; };
+		A11CE00500000000000000F2 /* ChatViewModel+Transcript.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE00500000000000000F1 /* ChatViewModel+Transcript.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -62,6 +64,8 @@
 		A11CE00100000000000000F1 /* VoiceChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceChat.swift; sourceTree = "<group>"; };
 		A11CE00200000000000000F1 /* SpeedTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTest.swift; sourceTree = "<group>"; };
 		A11CE00300000000000000F1 /* SpeedTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTestView.swift; sourceTree = "<group>"; };
+		A11CE00400000000000000F1 /* VoiceTranscription.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTranscription.swift; sourceTree = "<group>"; };
+		A11CE00500000000000000F1 /* ChatViewModel+Transcript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatViewModel+Transcript.swift"; sourceTree = "<group>"; };
 		4803AD3F35D795E904CD172C /* ChatViewModel+PinRoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatViewModel+PinRoom.swift"; sourceTree = "<group>"; };
 		83D530576D5CF8B70831C69D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		A2020E912F57C36E00ECD0B9 /* Unspoken.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Unspoken.entitlements; sourceTree = "<group>"; };
@@ -131,6 +135,8 @@
 				A11CE00100000000000000F1 /* VoiceChat.swift */,
 				A11CE00200000000000000F1 /* SpeedTest.swift */,
 				A11CE00300000000000000F1 /* SpeedTestView.swift */,
+				A11CE00400000000000000F1 /* VoiceTranscription.swift */,
+				A11CE00500000000000000F1 /* ChatViewModel+Transcript.swift */,
 				29DFCF37AFC447A104B9AC1A /* ChatViewModel.swift */,
 				A8C505B8CE2BFBE243EBA3E2 /* ChatViewModel+Crypto.swift */,
 				4803AD3F35D795E904CD172C /* ChatViewModel+PinRoom.swift */,
@@ -278,6 +284,8 @@
 				A11CE00100000000000000F2 /* VoiceChat.swift in Sources */,
 				A11CE00200000000000000F2 /* SpeedTest.swift in Sources */,
 				A11CE00300000000000000F2 /* SpeedTestView.swift in Sources */,
+				A11CE00400000000000000F2 /* VoiceTranscription.swift in Sources */,
+				A11CE00500000000000000F2 /* ChatViewModel+Transcript.swift in Sources */,
 				23302727FE83731000625271 /* ChatViewModel.swift in Sources */,
 				0193A61A5F80249E1BFF288A /* ChatViewModel+Crypto.swift in Sources */,
 				DDFF87178E1374F788630E97 /* ChatViewModel+PinRoom.swift in Sources */,

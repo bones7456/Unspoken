@@ -33,6 +33,7 @@ private enum ActiveSheet: Identifiable {
     case memeSearch
     case confirmImage(IdentifiableImages)
     case fullScreenImage(ImageGallery)
+    case transcriptLanguage
 
     var id: String {
         switch self {
@@ -40,6 +41,7 @@ private enum ActiveSheet: Identifiable {
         case .memeSearch:               return "memeSearch"
         case .confirmImage(let i):      return "confirm-\(i.id)"
         case .fullScreenImage(let g):   return "full-\(g.id)"
+        case .transcriptLanguage:       return "transcriptLanguage"
         }
     }
 }
@@ -370,6 +372,8 @@ struct ContentView: View {
     @State private var typingDebounceTimer: Timer?
     @State private var insertingNewLine: Bool = false
     @State private var showUnpinDialog: Bool = false
+    /// The language picker shouldn't drag the keyboard back up the way the image sheets do.
+    @State private var suppressRefocusOnDismiss: Bool = false
 
     var canSendMessage: Bool { viewModel.peerPublicKey != nil }
     // A voice message needs somewhere to land: an online peer, or a pinned room where the
@@ -454,6 +458,8 @@ struct ContentView: View {
                 let imgs = stagedImages
                 stagedImages = []
                 activeSheet = .confirmImage(IdentifiableImages(images: imgs))
+            } else if suppressRefocusOnDismiss {
+                suppressRefocusOnDismiss = false
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { isTextFieldFocused = true }
             }
@@ -496,6 +502,18 @@ struct ContentView: View {
                 )
             case .fullScreenImage(let gallery):
                 ImageGalleryView(gallery: gallery) { activeSheet = nil }
+            case .transcriptLanguage:
+                if #available(iOS 26.0, *) {
+                    TranscriptLanguagePicker(
+                        locales: viewModel.availableTranscriptLocales,
+                        selected: viewModel.transcriptLocale,
+                        onSelect: { locale in
+                            viewModel.setTranscriptLocale(locale)
+                            activeSheet = nil
+                        },
+                        onCancel: { activeSheet = nil }
+                    )
+                }
             }
         }
     }
@@ -605,6 +623,29 @@ struct ContentView: View {
 
     /// Opens the full-screen viewer on `message`, with every other image in the conversation
     /// loaded alongside it so the user can page between them.
+    // MARK: - Voice transcription
+
+    /// Localized name of the language transcription runs in, shown on each transcript's chip.
+    private var transcriptLocaleName: String {
+        viewModel.transcriptLocale.map { ChatViewModel.transcriptLocaleName($0) } ?? ""
+    }
+
+    private func handleTranscriptAction(_ action: TranscriptAction, for message: Message) {
+        guard #available(iOS 26.0, *) else { return }
+        switch action {
+        case .toggle:
+            viewModel.toggleTranscript(messageId: message.id)
+        case .retry:
+            viewModel.retryTranscript(messageId: message.id)
+        case .download:
+            viewModel.confirmTranscriptDownload(messageId: message.id)
+        case .pickLanguage:
+            viewModel.loadAvailableTranscriptLocales()
+            suppressRefocusOnDismiss = true
+            activeSheet = .transcriptLanguage
+        }
+    }
+
     private func openGallery(from message: Message) {
         let shots = viewModel.messages.filter { $0.imageData != nil }
         guard let start = shots.firstIndex(where: { $0.id == message.id }) else { return }
@@ -639,7 +680,9 @@ struct ContentView: View {
                             }, onQuote: {
                                 quotedMessage = message
                                 isTextFieldFocused = true
-                            })
+                            }, onTranscriptAction: { action in
+                                handleTranscriptAction(action, for: message)
+                            }, transcriptLocaleName: transcriptLocaleName)
                         }
                         if !viewModel.typingContent.isEmpty {
                             MessageView(
@@ -964,4 +1007,68 @@ struct ContentView: View {
     }
 
     private func clearMessage() { messageText = "" }
+}
+
+
+// MARK: - TranscriptLanguagePicker
+// Transcription needs the language up front — neither Speech engine does spoken-language
+// identification, and there is no public API for it — so this is how a transcript gets fixed
+// when the peer turns out to be speaking something else. Languages already on the device are
+// listed first: picking one of those costs no download and no network.
+
+@available(iOS 26.0, *)
+private struct TranscriptLanguagePicker: View {
+    let locales: [Locale]
+    let selected: Locale?
+    let onSelect: (Locale) -> Void
+    let onCancel: () -> Void
+
+    @State private var installed: Set<String> = []
+
+    private var ready: [Locale] { locales.filter { installed.contains($0.identifier(.bcp47)) } }
+    private var rest: [Locale]  { locales.filter { !installed.contains($0.identifier(.bcp47)) } }
+
+    var body: some View {
+        NavigationView {
+            List {
+                if locales.isEmpty {
+                    HStack { Spacer(); ProgressView(); Spacer() }
+                } else {
+                    if !ready.isEmpty {
+                        Section("On this device") { rows(ready) }
+                    }
+                    if !rest.isEmpty {
+                        Section("Needs a one-time download") { rows(rest) }
+                    }
+                }
+            }
+            .navigationTitle("Transcript Language")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+            }
+        }
+        .task {
+            installed = Set(await VoiceTranscriber.installedLocales().map { $0.identifier(.bcp47) })
+        }
+    }
+
+    private func rows(_ items: [Locale]) -> some View {
+        ForEach(items, id: \.identifier) { locale in
+            Button {
+                onSelect(locale)
+            } label: {
+                HStack {
+                    Text(ChatViewModel.transcriptLocaleName(locale))
+                    Spacer()
+                    if locale == selected {
+                        Image(systemName: "checkmark").foregroundColor(.accentColor)
+                    }
+                }
+            }
+            .foregroundColor(.primary)
+        }
+    }
 }

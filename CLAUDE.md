@@ -351,6 +351,116 @@ are still `pending_ack`ed so the stop-and-wait queue can drain).
 ### Cross-client note
 `Unspoken-web` does not yet play `audio` (its fallback renders base64 as text) — voice is iOS↔iOS only for now.
 
+## Voice Transcription (on-device, iOS 26+)
+
+Any voice bubble — received **or** sent — carries a captions button that expands an on-device
+transcript underneath it. It is deliberately **on demand**, not automatic: the point is "I can't
+listen right now", so transcribing every clip would just burn battery for text nobody reads.
+
+**The audio never leaves the device and never touches disk.** `SpeechTranscriber` /
+`DictationTranscriber` (iOS 26) have no server mode at all, unlike `SFSpeechRecognizer`, which
+uploads to Apple unless `requiresOnDeviceRecognition` is set — so there is no "silently falls back
+to the network" path to defend against. The transcript itself is never sent to the peer, never
+written to UserDefaults, and dies with the room along with the message it belongs to. The one
+moment the feature uses the network is the first-time language-model download, which is gated
+behind an explicit in-bubble consent panel.
+
+### Files
+- **`Unspoken/VoiceTranscription.swift`** — `MemoryAudioDecoder` + the `VoiceTranscriber` actor.
+- **`Unspoken/ChatViewModel+Transcript.swift`** — state machine, language resolution, task lifecycle.
+- **`Models.swift`** — `TranscriptState`; `Message.transcript` / `.transcriptExpanded`.
+- **`MessageView.swift`** — `TranscriptAction`, the captions button and the transcript panel inside
+  `VoiceBubbleView`.
+- **`ContentView.swift`** — `handleTranscriptAction`, and `TranscriptLanguagePicker` as an
+  `ActiveSheet` case (never a second `.sheet` modifier — see the enum's comment).
+
+Servers are untouched: transcription is purely a local rendering of a message already received.
+
+### No-file decoding
+`SpeechAnalyzer`'s convenient entry points want an `AVAudioFile`, which only exists on disk.
+`MemoryAudioDecoder` instead opens the m4a through `AudioFileOpenWithCallbacks` (read/getSize
+callbacks backed by the in-memory `Data`) and wraps it with `ExtAudioFileWrapAudioFileID` for
+decode + sample-rate conversion, so decrypt → PCM → transcript happens entirely in RAM.
+
+The one trap: `AVAudioPCMBuffer.mutableAudioBufferList` derives `mDataByteSize` from
+**`frameLength`, not `frameCapacity`**. The buffer must be opened to full length before each
+`ExtAudioFileRead` or the read sees a zero-byte destination, returns 0 frames, and the transcript
+comes back silently empty.
+
+Decoding is eager (whole clip at once), bounded by `VoiceTranscriber.maxDuration` (300 s ≈ 19 MB
+of float PCM). Real voice messages are seconds long.
+
+### Two engines, 54 languages
+`SpeechTranscriber` (the new large model) covers 30 locales and is a **strict subset** of
+`DictationTranscriber`'s 54. The extra 24 are
+`ar ca cs da el fi he hi hr hu id ms nb nl pl ro ru sk sv th tr uk vi`.
+
+**Their assets install separately, and a locale present for one says nothing about the other.**
+`VoiceTranscriber.plan(for:)` therefore picks on two axes, not one:
+1. any engine whose model is **already on the device** (best quality among the free options);
+2. otherwise `.dictation`, because somebody is about to wait on a download and `.speech` is
+   Apple's much larger Apple-Intelligence model. Measured: zh-CN dictation installs in ~110 s and
+   transcribes a 5 s clip in 0.67 s **with punctuation**, so the quality gap does not justify the
+   wait. `.speech`'s 30 locales are a subset of `.dictation`'s 54, so this branch always exists.
+
+Getting this wrong is not a quiet degradation: choosing an engine whose assets are missing makes
+`SpeechAnalyzer.bestAvailableAudioFormat` return **nil**, which surfaced as "No compatible audio
+format". The invariant to preserve is *`plan` reporting `needsDownload == false` implies
+`bestAvailableAudioFormat` is non-nil.*
+
+`DictationTranscriber` must use the **`.longDictation`** preset: `.shortDictation` returns an
+**empty transcript** for an ordinary few-second voice message.
+
+### The language must be chosen up front
+Neither engine does spoken-language identification and Apple exposes no public API for it, so the
+locale is required at `init`. Default is `Locale.current`, normalised by `VoiceTranscriber.resolve`
+(exact BCP-47 → same language+region → the language's CLDR likely region → any installed variant);
+the user's override persists in UserDefaults under `transcriptLocale`, and changing it re-runs every
+transcript currently on screen. Two bugs worth not reintroducing in `resolve`:
+`Locale.Language.maximalIdentifier` is **`-`-separated** (`-`-splitting is what makes `en` land on
+`en-US` rather than `en-ZA`), and it must be built from `wanted.language`, not the bare language
+code, or the script subtag is lost and `zh-Hant` resolves to `zh-CN` instead of `zh-TW`.
+
+### Asset installation
+`AssetInstallationRequest.progress` is dependable **on device** (it animates to 100% in about a
+minute) but not everywhere: on macOS it sits at `totalUnitCount == 1 / completedUnitCount == 0`
+for the entire ~110 s download and only flips after `downloadAndInstall()` has already returned.
+`downloadAssets` therefore reports `(fraction, elapsedSeconds)` and the bubble draws a real bar
+when the fraction moves, a spinner when it doesn't, with the clock shown either way.
+
+**"Installed" and "loadable" are different things, and they genuinely disagree.** A locale can be
+in `installedLocales` while every engine reports no compatible audio format for it — which is what
+the **Simulator** does for *all* locales (it also reports `SpeechTranscriber.supportedLocales` as
+empty, since it has no Apple Intelligence). **Transcription cannot be tested in the Simulator at
+all; it needs a real device.** `VoiceTranscriptionError.modelUnusable` exists for exactly this and
+must never be reported as "needs download" — doing so bounced the bubble back to the download
+prompt, where pressing Download did nothing visible and looped forever.
+
+`downloadAndInstall()` returning — even reaching 100% — is **not** proof the locale became usable.
+A zh-CN `.speech` model was observed downloading to completion and still leaving
+`bestAvailableAudioFormat` nil. So the install is followed by an `isReady` check that raises
+`downloadDidNotInstall`; without it the failure silently bounced the bubble back to the same
+download prompt, which looked like the button did nothing.
+
+`AssetInventory.status(forModules:)` reports module support rather than locale installation, and
+`assetInstallationRequest(supporting:)` returns non-nil even for a locale that is installed and
+working. **`SpeechTranscriber.installedLocales` / `DictationTranscriber.installedLocales` is the
+only reliable readiness check** — but it has to be consulted **per engine**, which is what
+`plan(for:)` does; the union of the two lists is not a usable readiness signal. After a successful
+install the locale is `reserve`d so the system doesn't reclaim it (cap:
+`AssetInventory.maximumReservedLocales`, which is 5).
+
+### UI notes
+The captions button is a sibling of the playback hit area, not inside it, so the bubble-wide
+`onTapGesture` that toggles playback can't swallow it. It is `#available(iOS 26.0, *)`-gated, which
+is what keeps the panel unreachable on older systems while the app stays on a 15.0 deployment
+target. The transcript entry is **not** in the context menu on purpose: `withMessageInteraction`
+only builds a `contextMenu` when `showReport` is true, and `showReport` is `!isPinned` — a menu item
+would be invisible to every pinned room.
+
+Transcription still works in a farewell room: `enterFarewell` clears `peerPublicKey` (the sending
+gate), but the audio is already in `messages` and the recogniser needs no peer.
+
 ## Speed Test
 
 A "Speed Test" button on `RoomSelectionView` opens `SpeedTestView`, which runs one connection

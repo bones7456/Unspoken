@@ -33,6 +33,21 @@ struct QuoteContent {
     }
 }
 
+// MARK: - TranscriptState
+
+/// Where a voice message is in the on-device transcription flow (see VoiceTranscription.swift).
+/// Lives only in memory: a transcript is never sent to the peer, never written to UserDefaults,
+/// and dies with the room, exactly like the message it belongs to.
+enum TranscriptState: Equatable {
+    case none                       // never asked for
+    case needsDownload(Locale)      // language model not installed yet — needs the user's consent
+    case downloading(fraction: Double, elapsed: Int)   // fraction is 0 when unreported
+    case running
+    case done(String)
+    case empty                      // recognised fine, but there was nothing to say
+    case failed(String)
+}
+
 // MARK: - Message
 
 struct Message: Identifiable {
@@ -49,6 +64,10 @@ struct Message: Identifiable {
     let audioDuration: TimeInterval?
     let seq: Int?
     var isAcked: Bool
+    // Voice-message transcription (iOS 26+), for both directions. `transcriptExpanded` is kept
+    // apart from `transcript` so collapsing the panel doesn't throw away text we already have.
+    var transcript: TranscriptState = .none
+    var transcriptExpanded: Bool = false
     // At most one layer of quoting; quote holds a text snippet, image thumbnail, or voice duration
     let quote: QuoteContent?
 
