@@ -66,6 +66,15 @@ Views, models, and utilities:
 
 **State flow:** `ChatViewModel` is created as `@StateObject` in `UnspokenApp` and passed via `@EnvironmentObject` to child views. Navigation switches between `RoomSelectionView` and `ContentView` based on `chatViewModel.isChatOpen`.
 
+**Entering a room (create / join / pinned rejoin / URL scheme):** until the chat opens, the reconnect
+machinery is inert (`scheduleReconnect` is gated on `isChatOpen`), so `ChatViewModel` tracks the
+attempt itself — `isEnteringRoom` + a 12 s deadline (`beginEnteringRoom`). It ends at
+`room_created`/`room_joined`, or via `failEnteringRoom`, which puts the reason in `joinError` for the
+selection screen: a socket error/close or the deadline ("can't reach the server", "you appear to be
+offline", or a non-Unspoken HTTP answer), or the server's own `error`/`failed`/`login_failed` message.
+The deadline is what catches an unreachable server — a refused connection usually never errors,
+NWConnection just sits in `.waiting`.
+
 ### Server (single file `unspoken.py`)
 
 - Global dicts: `connected_users`, `rooms`, `user_public_keys`, `room_role_to_userid`, `pinned_rooms`, `pending_messages`
@@ -191,7 +200,7 @@ Pinned room metadata is protected by biometric authentication (`LocalAuthenticat
 - Double-tapping the "Unspoken" title in `RoomSelectionView` triggers `unlockPinnedRoom()` when `hasSavedPinnedRoom && !isPinned` (no visible icon)
 - `unlockPinnedRoom()` → `LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics)` → on success, `loadPinnedRoom()` restores room metadata, sets `isPinned = true`, and the rejoin UI appears
 - Fallback: if biometrics are unavailable (e.g. simulator, no enrolled Face ID), loads directly without auth
-- `NSFaceIDUsageDescription` is set as `INFOPLIST_KEY_NSFaceIDUsageDescription` in the Xcode build settings (`project.pbxproj`), not in `Unspoken/Info.plist` — the target uses `GENERATE_INFOPLIST_FILE = YES`. Same for `NSHealthShareUsageDescription`/`NSHealthUpdateUsageDescription`; only Camera/Microphone/HealthUpdate live in the checked-in `Info.plist`.
+- `NSFaceIDUsageDescription` is set as `INFOPLIST_KEY_NSFaceIDUsageDescription` in the Xcode build settings (`project.pbxproj`), not in `Unspoken/Info.plist` — the target uses `GENERATE_INFOPLIST_FILE = YES`. Same for every usage description (Camera, Microphone, HealthShare/HealthUpdate) and `ITSAppUsesNonExemptEncryption`; the checked-in `Info.plist` only holds the URL scheme, icon name and scene manifest.
 
 ## Heart Rate Feature
 

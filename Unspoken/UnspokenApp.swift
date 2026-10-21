@@ -39,6 +39,10 @@ struct UnspokenApp: App {
         }
 
         let port = url.port ?? 8765
+        guard isValidServerPort(String(port)) else {
+            chatViewModel.joinError = invalidPortMessage
+            return
+        }
         let roomId = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
         guard !roomId.isEmpty else { return }
@@ -222,7 +226,7 @@ struct RoomSelectionView: View {
 
                             // Connection check against the server configured above — handy
                             // before pinning a room on a network you don't trust yet.
-                            Button(action: { showSpeedTest = true }) {
+                            Button(action: { dismissKeyboard(); showSpeedTest = true }) {
                                 HStack(spacing: 6) {
                                     Image(systemName: "speedometer")
                                     Text("Speed Test")
@@ -235,7 +239,15 @@ struct RoomSelectionView: View {
                             }
                         }
 
-                        if let error = errorMessage {
+                        if chatViewModel.isEnteringRoom {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                Text("Connecting to \(chatViewModel.serverHost)…")
+                                    .font(.subheadline)
+                                    .foregroundColor(.white)
+                            }
+                        } else if let error = errorMessage {
                             Text(error)
                                 .foregroundColor(.red)
                                 .padding()
@@ -291,8 +303,8 @@ struct RoomSelectionView: View {
                 isRoomSelected = true
             }
         }
-        // A rejoin the server refused (the pinned room is gone) surfaces here instead of the
-        // card just silently disappearing.
+        // A create/join/rejoin that never reached a room (server unreachable, room gone, …)
+        // surfaces here instead of the buttons just silently doing nothing.
         .onReceive(chatViewModel.$joinError) { error in
             guard let error else { return }
             errorMessage = error
@@ -328,14 +340,26 @@ struct RoomSelectionView: View {
     }
 
     private var canJoin: Bool {
-        return agreeToTerms && chatViewModel.roomId.count >= 4 && chatViewModel.roomId.allSatisfy { $0.isNumber }
+        return agreeToTerms && !chatViewModel.isEnteringRoom && chatViewModel.roomId.count >= 4 && chatViewModel.roomId.allSatisfy { $0.isNumber }
     }
 
     private var canCreate: Bool {
-        return agreeToTerms
+        return agreeToTerms && !chatViewModel.isEnteringRoom
+    }
+
+    /// The result of every action below (an error, or "Connecting…") is shown below the buttons,
+    /// right where the keyboard sits — get it out of the way first.
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     private func createRoom() {
+        dismissKeyboard()
+        errorMessage = nil
+        guard isValidServerPort(chatViewModel.serverPort) else {
+            errorMessage = invalidPortMessage
+            return
+        }
         chatViewModel.role = "host"
         chatViewModel.updateServerAddress(address: chatViewModel.serverHost, port: chatViewModel.serverPort)
         chatViewModel.createRoom()
@@ -348,10 +372,16 @@ struct RoomSelectionView: View {
     }
 
     private func joinRoom(roomId: String) {
+        dismissKeyboard()
         guard !roomId.isEmpty else {
             errorMessage = "Room ID cannot be empty"
             return
         }
+        guard isValidServerPort(chatViewModel.serverPort) else {
+            errorMessage = invalidPortMessage
+            return
+        }
+        errorMessage = nil
 
         chatViewModel.role = "guest"
         chatViewModel.roomId = roomId
@@ -366,6 +396,9 @@ struct RoomSelectionView: View {
     }
 
     private func rejoinPinnedRoom(_ entry: PinnedRoomEntry) {
+        dismissKeyboard()
+        guard !chatViewModel.isEnteringRoom else { return }
+        errorMessage = nil
         guard chatViewModel.loadPinnedRoom(entry) else { return }
         chatViewModel.updateServerAddress(address: chatViewModel.serverHost, port: chatViewModel.serverPort)
         chatViewModel.joinRoom()

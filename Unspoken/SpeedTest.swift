@@ -233,7 +233,7 @@ final class SpeedTestRunner: ObservableObject, WebSocketDelegate {
     func start(host: String, port: String, useSSL: Bool, userId: String, publicKeyBase64: String?) {
         cancel()
         let scheme = useSSL ? "wss" : "ws"
-        guard !host.isEmpty, !port.isEmpty,
+        guard !host.isEmpty, isValidServerPort(port),
               let url = URL(string: "\(scheme)://\(host):\(port)") else {
             publish { self.phase = .failed; self.errorMessage = "That server address doesn't look right." }
             return

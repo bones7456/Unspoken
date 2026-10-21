@@ -14,6 +14,15 @@ import Network
 
 typealias StarscreamWebSocket = Starscream.WebSocket
 
+/// Starscream force-unwraps `NWEndpoint.Port(rawValue: UInt16(port))`, so a port outside
+/// 1...65535 crashes the app instead of failing the connection — check before handing it over.
+func isValidServerPort(_ port: String) -> Bool {
+    guard let value = UInt16(port) else { return false }
+    return value > 0
+}
+
+let invalidPortMessage = "The port must be a number between 1 and 65535."
+
 /// Why a room ended. Both cases keep the conversation readable instead of closing the chat.
 enum FarewellReason: Equatable {
     case unpinnedByPeer
@@ -68,13 +77,17 @@ class ChatViewModel: ObservableObject {
     @Published var farewellDraining: Bool = false
     /// Server-side destruction deadline of a room unpinned with grace (nil = already gone).
     @Published var farewellGraceUntil: Date?
-    /// A rejoin the server refused because the room no longer exists; shown on the selection screen.
+    /// Why a create/join/rejoin from the selection screen failed (server unreachable, room gone,
+    /// …); shown there.
     @Published var joinError: String?
+    /// A create/join/rejoin started from the selection screen hasn't reached a room yet.
+    @Published var isEnteringRoom: Bool = false
 
     var isFarewell: Bool { farewell != nil }
 
     private var socket: StarscreamWebSocket?
     private var farewellDrainTimer: Timer?
+    private var enterRoomTimer: Timer?
     var healthStore: HKHealthStore?
     var heartRateTimer: Timer?
     var hapticLoopActive = false
@@ -239,7 +252,8 @@ class ChatViewModel: ObservableObject {
     func setupWebSocket() {
         socket?.delegate = nil
         socket?.disconnect()
-        guard let url = URL(string: serverAddress) else {
+        guard let url = URL(string: serverAddress),
+              let port = url.port, isValidServerPort(String(port)) else {
             print("Invalid server address: \(serverAddress)")
             return
         }
@@ -289,6 +303,7 @@ class ChatViewModel: ObservableObject {
         isUserLeft = false
         isLocked = false
         reconnectAttempts = 0
+        beginEnteringRoom()
         pendingAction = { [weak self] in
             self?.sendLogin()
             self?.sendJSON(["action": "create_room", "user_id": self?.userId as Any])
@@ -298,6 +313,7 @@ class ChatViewModel: ObservableObject {
     func joinRoom() {
         isUserLeft = false
         isLocked = false
+        if !isChatOpen { beginEnteringRoom() }
         pendingAction = { [weak self] in
             self?.sendLogin()
             var msg: [String: Any] = [
@@ -310,6 +326,54 @@ class ChatViewModel: ObservableObject {
             }
             self?.sendJSON(msg)
         }
+    }
+
+    // MARK: - Entering a room from the selection screen
+
+    /// Until the chat opens, the reconnect machinery stays out of it (`scheduleReconnect` is
+    /// gated on `isChatOpen`), so a failure here would otherwise be completely silent. A refused
+    /// TCP/TLS connection often never errors out either — NWConnection just sits in `.waiting` —
+    /// hence the overall deadline on top of the socket events.
+    private func beginEnteringRoom() {
+        isEnteringRoom = true
+        enterRoomTimer?.invalidate()
+        enterRoomTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: false) { [weak self] _ in
+            self?.failEnteringRoom(nil)
+        }
+    }
+
+    /// The server answered with a room: the chat is about to open.
+    func finishEnteringRoom() {
+        enterRoomTimer?.invalidate()
+        isEnteringRoom = false
+    }
+
+    /// Abandon the attempt and tell the selection screen why. `serverMessage` is the server's own
+    /// refusal (room not found, key mismatch, …); nil means the server was never reached.
+    func failEnteringRoom(_ serverMessage: String?, connectionError: Error? = nil) {
+        guard isEnteringRoom, !isChatOpen else { return }
+        finishEnteringRoom()
+        pendingAction = nil
+        if let serverMessage {
+            joinError = serverMessage
+            return
+        }
+        // Drop the half-open socket, so a late handshake can't open the chat after the error.
+        socket?.delegate = nil
+        socket?.disconnect()
+        isSocketConnected = false
+        joinError = unreachableMessage(for: connectionError)
+    }
+
+    private func unreachableMessage(for error: Error?) -> String {
+        let server = "\(serverHost):\(serverPort)"
+        if pathMonitor?.currentPath.status == .unsatisfied {
+            return "You appear to be offline. Check your internet connection and try again."
+        }
+        if case .notAnUpgrade(let code, _)? = error as? HTTPUpgradeError {
+            return "\(server) answered (HTTP \(code)), but it isn't an Unspoken server. Check the address, port and SSL setting."
+        }
+        return "Can't reach the server at \(server). Check the address and port, or try again later."
     }
 
     // MARK: - Farewell (the room ended, but its messages stay readable)

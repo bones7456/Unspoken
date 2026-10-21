@@ -24,6 +24,7 @@ extension ChatViewModel: WebSocketDelegate {
             print("WebSocket disconnected: \(reason) (\(code))")
             DispatchQueue.main.async { [weak self] in
                 self?.isSocketConnected = false
+                self?.failEnteringRoom(nil)
                 self?.scheduleReconnect()
             }
         case .text(let string):
@@ -32,6 +33,7 @@ extension ChatViewModel: WebSocketDelegate {
             print("WebSocket error: \(error?.localizedDescription ?? "Unknown error")")
             DispatchQueue.main.async { [weak self] in
                 self?.isSocketConnected = false
+                self?.failEnteringRoom(nil, connectionError: error)
                 self?.scheduleReconnect()
             }
         case .viabilityChanged(let isViable):
@@ -54,6 +56,7 @@ extension ChatViewModel: WebSocketDelegate {
         case .peerClosed:
             DispatchQueue.main.async { [weak self] in
                 self?.isSocketConnected = false
+                self?.failEnteringRoom(nil)
                 self?.scheduleReconnect()
             }
         default:
@@ -77,6 +80,7 @@ extension ChatViewModel: WebSocketDelegate {
                    let role   = json["role"] as? String {
                     self.roomId = roomId
                     self.role   = role
+                    self.finishEnteringRoom()
                     if self.didShowDisconnectMessage {
                         self.addSystemMessage("Reconnected")
                         self.didShowDisconnectMessage = false
@@ -314,8 +318,13 @@ extension ChatViewModel: WebSocketDelegate {
                             self.role = ""
                             self.peerPublicKey = nil
                             self.peerUserId = nil
+                            self.finishEnteringRoom()
                             self.joinError = "This pinned room no longer exists. It has been removed from this device."
                         }
+                    } else {
+                        // Any other refusal before the chat opened (room full, key mismatch, too
+                        // many rooms): say so instead of leaving the selection screen hanging.
+                        self.failEnteringRoom(errorMessage)
                     }
                 }
 
@@ -330,8 +339,9 @@ extension ChatViewModel: WebSocketDelegate {
                     self.messages[idx].isAcked = true
                 }
 
-            case "login_failed":
+            case "login_failed", "failed":
                 print("login failed")
+                self.failEnteringRoom(json["message"] as? String ?? "The server refused this device.")
 
             default:
                 break
