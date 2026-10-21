@@ -822,8 +822,9 @@ if __name__ == '__main__':
     if args.no_ssl:
         ssl_context = None
     else:
-        SSL_CERT = "/etc/letsencrypt/live/unspoken.luy.li/fullchain.pem"
-        SSL_KEY = "/etc/letsencrypt/live/unspoken.luy.li/privkey.pem"
+        credentials_dir = os.environ["CREDENTIALS_DIRECTORY"]
+        SSL_CERT = os.path.join(credentials_dir, "fullchain.pem")
+        SSL_KEY = os.path.join(credentials_dir, "privkey.pem")
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(certfile=SSL_CERT, keyfile=SSL_KEY)
 
